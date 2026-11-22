@@ -1,0 +1,21 @@
+.env
+.env.*
+.venv/
+venv/
+.pytest_cache/
+data/generated/*
+!data/generated/.gitkeep
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local file history
+.history/
