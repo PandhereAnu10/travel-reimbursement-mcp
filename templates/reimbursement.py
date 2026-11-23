@@ -172,3 +172,37 @@ SUBMISSION_STATUS_OPTIONS = [
     "Submitted to HR"
 ]
 
+
+
+# Workbook default and formatting
+
+# Claim submission status
+DEFAULT_STATUS = "Draft"
+SUBMITTED_STATUS = "Submitted to HR"
+
+# Date and currency display formats
+DATE_FORMAT = "DD-MMM-YYYY"
+CURRENCY_FORMAT = '₹#,##,##0.00'
+
+# Workbook styling colours (ARGB without the #)
+INPUT_FILL_COLOR = "FFFFF2CC"   # Light yellow
+HEADER_FILL_COLOR = "FF1F4E78"  # Dark blue
+
+# Expense date validation
+OUTSIDE_TRAVEL_DATES_FLAG = "Outside travel dates"
+
+
+# REquired Employee Fields for submitting to hr
+
+REQUIRED_EMPLOYEE_FIELDS = (
+    "employee_name",
+    "employee_id",
+    "department",
+    "designation",
+    "email",
+    "travel_purpose",
+    "source_location",
+    "destination_location",
+    "travel_start_date",
+    "travel_end_date",
+)
