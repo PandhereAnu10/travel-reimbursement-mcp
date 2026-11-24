@@ -1,0 +1,243 @@
+from openpyxl import load_workbook
+
+from tools.create_excel import OUTPUT_DIR, validate_filename
+from zipfile import BadZipFile
+from openpyxl.utils.exceptions import InvalidFileException
+
+from templates.reimbursement import (
+    EXPENSE_SHEET,
+    EXPENSE_HEADER_ROW,
+    EXPENSE_FIRST_ROW,
+    EXPENSE_LAST_ROW,
+    EXPENSE_COLUMNS,
+    EXPENSE_HEADERS,
+    EXPENSE_CATEGORIES,
+    DATE_FORMAT,
+    CURRENCY_FORMAT,
+)
+
+from tools.common_func import (
+    save_workbook_safely,
+    validate_expense_date,
+    validate_expense_amount,
+    validate_text,
+)
+
+
+EDITABLE_FIELDS = {
+    "date",
+    "category",
+    "description",
+    "amount",
+    "receipt_reference",
+}
+
+def update_excel(
+    filename: str,
+    expense_id: str,
+    updates: dict,
+) -> dict:
+    # Update selected fields of an existing expense record
+
+    workbook = None
+
+    try:
+        # 1. Validate filename.
+        filename = validate_filename(filename)
+        file_path = OUTPUT_DIR / filename
+
+        if not file_path.is_file():
+            raise FileNotFoundError(
+                f"Workbook '{filename}' was not found."
+            )
+
+        # 2. Validate Expense ID.
+        expense_id = validate_text(
+            expense_id,
+            "Expense ID",
+        )
+
+        # 3. Validate update payload.
+        if not isinstance(updates, dict) or not updates:
+            raise ValueError(
+                "At least one field must be provided for updating."
+            )
+
+        invalid_fields = set(updates.keys()) - EDITABLE_FIELDS
+
+        if invalid_fields:
+            raise ValueError(
+                f"Unsupported update fields: {sorted(invalid_fields)}. "
+                f"Allowed fields: {sorted(EDITABLE_FIELDS)}"
+            )
+
+        # 4. Validate all updated values before opening the workbook.
+        validated_updates = {}
+
+        for field, value in updates.items():
+
+            if value is None:
+                raise ValueError(
+                    f"Value for '{field}' cannot be null."
+                )
+
+            if field == "date":
+                validated_updates[field] = validate_expense_date(value)
+
+            elif field == "category":
+                if not isinstance(value, str):
+                    raise ValueError("Category must be text.")
+
+                value = value.strip()
+
+                if value not in EXPENSE_CATEGORIES:
+                    raise ValueError(
+                        f"Invalid category. Allowed categories: "
+                        f"{EXPENSE_CATEGORIES}"
+                    )
+
+                validated_updates[field] = value
+
+            elif field == "description":
+                validated_updates[field] = validate_text(
+                    value,
+                    "Description",
+                )
+
+            elif field == "amount":
+                validated_updates[field] = validate_expense_amount(value)
+
+            elif field == "receipt_reference":
+                validated_updates[field] = validate_text(
+                    value,
+                    "Receipt reference",
+                    allow_empty=True,
+                ) or None
+
+        # 5. Open workbook.
+        workbook = load_workbook(file_path)
+
+        if EXPENSE_SHEET not in workbook.sheetnames:
+            raise ValueError(
+                f"Worksheet '{EXPENSE_SHEET}' does not exist."
+            )
+
+        worksheet = workbook[EXPENSE_SHEET]
+
+        # 6. Verify worksheet headers.
+        actual_headers = [
+            worksheet.cell(
+                row=EXPENSE_HEADER_ROW,
+                column=column,
+            ).value
+            for column in range(1, len(EXPENSE_HEADERS) + 1)
+        ]
+
+        if actual_headers != EXPENSE_HEADERS:
+            raise ValueError(
+                "Expense worksheet headers do not match "
+                "the configured template."
+            )
+
+        # 7. Locate the expense by its unique ID.
+        id_column = EXPENSE_COLUMNS["expense_id"]
+        matching_rows = []
+
+        for row in range(
+            EXPENSE_FIRST_ROW,
+            EXPENSE_LAST_ROW + 1,
+        ):
+            current_id = worksheet.cell(
+                row=row,
+                column=id_column,
+            ).value
+
+            if (
+                current_id is not None
+                and str(current_id).strip().casefold()
+                == expense_id.casefold()
+            ):
+                matching_rows.append(row)
+
+        if not matching_rows:
+            raise ValueError(
+                f"Expense ID '{expense_id}' was not found."
+            )
+
+        if len(matching_rows) > 1:
+            raise ValueError(
+                f"Multiple records with Expense ID '{expense_id}' "
+                "were found. Update cancelled."
+            )
+
+        target_row = matching_rows[0]
+
+        # 8. Check that target cells do not contain formulas.
+        for field in validated_updates:
+            column = EXPENSE_COLUMNS[field]
+            cell = worksheet.cell(
+                row=target_row,
+                column=column,
+            )
+
+            if cell.data_type == "f":
+                raise ValueError(
+                    f"Cannot update '{field}' because the target "
+                    "cell contains a formula."
+                )
+
+        # 9. Apply the validated updates.
+        for field, value in validated_updates.items():
+            column = EXPENSE_COLUMNS[field]
+
+            worksheet.cell(
+                row=target_row,
+                column=column,
+            ).value = value
+
+            if field == "date":
+                worksheet.cell(
+                    row=target_row,
+                    column=column,
+                ).number_format = DATE_FORMAT
+
+            elif field == "amount":
+                worksheet.cell(
+                    row=target_row,
+                    column=column,
+                ).number_format = CURRENCY_FORMAT
+
+        # 10. Save safely.
+        save_workbook_safely(workbook, file_path)
+
+        return {
+            "status": "success",
+            "filename": filename,
+            "expense_id": expense_id,
+            "worksheet": EXPENSE_SHEET,
+            "row": target_row,
+            "updated_fields": list(validated_updates.keys()),
+            "message": "Expense record updated successfully.",
+        }
+
+    except (ValueError, FileNotFoundError) as error:
+        return {
+            "status": "error",
+            "message": str(error),
+        }
+
+    except OSError as error:
+        return {
+            "status": "error",
+            "message": f"Workbook could not be accessed or saved: {error}",
+        }
+        
+    except (BadZipFile, InvalidFileException) as error:
+        return {
+            "status": "error",
+            "message": f"Invalid or corrupted Excel workbook: {error}",
+        }
+
+    finally:
+        if workbook is not None:
+            workbook.close()
