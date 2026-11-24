@@ -47,8 +47,28 @@ def convert_mcp_tools_to_llm_tools(mcp_tools):
 
 
 def get_tool_result_text(result):
-    # Extract MCP tool res as text form LLM
+    # Check for structured tool output.
+    structured_content = getattr(
+        result,
+        "structuredContent",
+        None
+    )
 
+    if structured_content is None:
+        structured_content = getattr(
+            result,
+            "structured_content",
+            None
+        )
+
+    if structured_content is not None:
+        return json.dumps(
+            structured_content,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    # Otherwise, extract text content.
     content_parts = []
 
     for item in result.content:
@@ -90,10 +110,17 @@ async def main():
                 "role": "system",
                 "content": (
                     "You are a travel reimbursement assistant. "
-                    "Use the available tools to complete the user's "
-                    "request. Do not claim a task succeeded unless "
-                    "the tool confirms it. Ask for missing information "
-                    "when necessary."
+                    "Understand the user's request and use the available tools "
+                    "to complete it. "
+                    "If the user only asks to create a workbook, create it "
+                    "immediately using the create_excel tool. "
+                    "Do not ask for expense details, receipts, or reference numbers "
+                    "when the user only requests workbook creation. "
+                    "Ask for missing information only when it is necessary "
+                    "for the specific requested operation. "
+                    "After a tool executes successfully, provide a concise "
+                    "confirmation of the completed task. "
+                    "Never claim success unless the tool confirms it."
                 ),
             },
             {
@@ -114,9 +141,9 @@ async def main():
                 tool_choice="auto",
             )
 
-            assistant_message = response
+            assistant_message = response.choices[0].message
             
-            print(assistant_message.model_dump_json(indent=2))
+            #print("Assistant:", assistant_message.model_dump_json(indent=2))
 
             # If the LLM doesn't request a tool, show its final answer.
             if not assistant_message.tool_calls:
@@ -156,13 +183,16 @@ async def main():
                     try:
                         result = await mcp_client.call_tool(
                             tool_name,
-                            tool_arguments,
+                            tool_arguments
                         )
 
                         tool_output = {
-                            "is_error": result.isError,
+                            "is_error": result.is_error,
                             "result": get_tool_result_text(result),
                         }
+
+                        print("\nMCP Tool Result:")
+                        print(json.dumps(tool_output, indent=2))
 
                     except Exception as error:
                         tool_output = {
