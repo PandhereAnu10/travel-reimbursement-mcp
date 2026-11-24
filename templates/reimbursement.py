@@ -187,9 +187,13 @@ CURRENCY_FORMAT = '₹#,##,##0.00'
 # Workbook styling colours (ARGB without the #)
 INPUT_FILL_COLOR = "FFFFF2CC"   # Light yellow
 HEADER_FILL_COLOR = "FF1F4E78"  # Dark blue
+OUTPUT_FILL_COLOR = "FFE2F0D9"
+BORDER_COLOR = "FFD9E1F2"
 
 # Expense date validation
 OUTSIDE_TRAVEL_DATES_FLAG = "Outside travel dates"
+WITHIN_TRAVEL_DATES_FLAG = "Within travel dates"
+MISSING_TRAVEL_DATES_FLAG = "Travel dates not provided"
 
 
 # REquired Employee Fields for submitting to hr

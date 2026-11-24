@@ -65,11 +65,18 @@ def read_excel(filename: str, sheet_name: str = None) -> dict:
                     for value in row
                 ]
 
-                # Ignore completely empty rows.
-                if any(value is not None for value in converted_row):
-                    rows.append(converted_row)
+                has_actual_data = any(
+                    value is not None
+                    and not (
+                        isinstance(value, str)
+                        and value.startswith("=")
+                    )
+                    for value in converted_row
+                )
 
-            result[current_sheet] = rows
+                if has_actual_data:
+                    rows.append(converted_row)
+                    result[current_sheet] = rows
 
         # Step 7: Return structured data.
         return {

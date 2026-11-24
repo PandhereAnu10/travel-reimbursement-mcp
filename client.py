@@ -9,13 +9,13 @@ from mcp import Client, StdioServerParameters
 from dotenv import load_dotenv
 from litellm import acompletion
 
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")
-LLM_API_KEY = os.getenv("LLM_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL")
-
 # project dir
 PROJECT_DIR = Path(__file__).resolve().parent
 load_dotenv(PROJECT_DIR / ".env")
+
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")
+LLM_API_KEY = os.getenv("LLM_API_KEY")
+LLM_MODEL = os.getenv("LLM_MODEL")
 
 # for missing env var
 if not all([LLM_BASE_URL, LLM_API_KEY, LLM_MODEL]):
@@ -47,7 +47,6 @@ def convert_mcp_tools_to_llm_tools(mcp_tools):
 
 
 def get_tool_result_text(result):
-    # Check for structured tool output.
     structured_content = getattr(
         result,
         "structuredContent",
@@ -62,13 +61,8 @@ def get_tool_result_text(result):
         )
 
     if structured_content is not None:
-        return json.dumps(
-            structured_content,
-            ensure_ascii=False,
-            indent=2
-        )
+        return structured_content
 
-    # Otherwise, extract text content.
     content_parts = []
 
     for item in result.content:
@@ -77,7 +71,12 @@ def get_tool_result_text(result):
         else:
             content_parts.append(str(item))
 
-    return "\n".join(content_parts)
+    text_result = "\n".join(content_parts)
+
+    try:
+        return json.loads(text_result)
+    except json.JSONDecodeError:
+        return text_result
 
 
 async def main():
@@ -106,23 +105,48 @@ async def main():
         user_prompt = input("\nWhat would you like to do? ")
 
         messages = [
+            
             {
                 "role": "system",
                 "content": (
-                    "You are a travel reimbursement assistant. "
-                    "Understand the user's request and use the available tools "
-                    "to complete it. "
-                    "If the user only asks to create a workbook, create it "
-                    "immediately using the create_excel tool. "
-                    "Do not ask for expense details, receipts, or reference numbers "
-                    "when the user only requests workbook creation. "
-                    "Ask for missing information only when it is necessary "
-                    "for the specific requested operation. "
-                    "After a tool executes successfully, provide a concise "
-                    "confirmation of the completed task. "
-                    "Never claim success unless the tool confirms it."
+                    "You are an intelligent travel reimbursement assistant. "
+                    "Understand the user's actual intent and select the most appropriate "
+                    "available MCP tool to perform the requested operation.\n\n"
+
+                    "TOOL SELECTION RULES:\n"
+                    "1. If the user asks to create, generate, or make a new workbook, "
+                    "call create_excel.\n"
+                    "2. If the user asks to read, retrieve, inspect, summarize, explain, "
+                    "or provide information from an existing workbook, call read_excel.\n"
+                    "3. Reading an existing workbook must NEVER trigger create_excel.\n"
+                    "4. Creating a new workbook must NEVER trigger read_excel unless "
+                    "the user explicitly requests both operations.\n"
+                    "5. Do not interpret a workbook filename as a request to create "
+                    "a workbook. Determine the operation from the user's actual request.\n"
+                    "6. When the user asks to read a workbook without specifying a "
+                    "particular worksheet, retrieve and inspect all available worksheets.\n"
+                    "7. When the user specifies a particular worksheet, retrieve and "
+                    "focus on that worksheet.\n"
+                    "8. If the user asks to read an existing workbook but does not "
+                    "provide its filename, ask for the filename rather than creating "
+                    "a new workbook.\n\n"
+
+                    "EXECUTION RULES:\n"
+                    "1. Use the available MCP tools to perform the requested operation.\n"
+                    "2. Pass the correct arguments required by the selected tool.\n"
+                    "3. Do not call unrelated tools or perform additional operations "
+                    "that the user did not request.\n"
+                    "4. Ask for missing information only when it is essential "
+                    "to complete the requested operation.\n"
+                    "5. After receiving a tool result, inspect its contents and "
+                    "provide the user with the actual result in a clear format.\n"
+                    "6. For workbook-reading requests, answer using the retrieved "
+                    "workbook data. Do not invent or assume missing values.\n"
+                    "7. Never claim that an operation succeeded unless the MCP tool "
+                    "confirms successful execution.\n"
                 ),
             },
+
             {
                 "role": "user",
                 "content": user_prompt,
@@ -139,6 +163,7 @@ async def main():
                 messages=messages,
                 tools=llm_tools,
                 tool_choice="auto",
+                max_tokens=2048,
             )
 
             assistant_message = response.choices[0].message
@@ -191,8 +216,8 @@ async def main():
                             "result": get_tool_result_text(result),
                         }
 
-                        print("\nMCP Tool Result:")
-                        print(json.dumps(tool_output, indent=2))
+                        #print("\nMCP Tool Result:")
+                        #print(json.dumps(tool_output, indent=2))
 
                     except Exception as error:
                         tool_output = {
@@ -204,7 +229,11 @@ async def main():
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": json.dumps(tool_output),
+                    "content": json.dumps(
+                        tool_output,
+                        ensure_ascii=False,
+                        separators=(",", ":")
+                    ),
                 })
 
         else:

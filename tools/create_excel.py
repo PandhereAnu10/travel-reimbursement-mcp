@@ -14,6 +14,10 @@ from templates.reimbursement import (
     SUMMARY_TITLE_CELL,
 )
 
+from templates.formatting import format_workbook
+from templates.formulas import add_workbook_formulas
+from templates.validations import add_workbook_validations
+
 
 # Project's output directory
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "data" / "generated"
@@ -62,30 +66,48 @@ def create_excel(filename: str) -> dict:
     # Step 5: Create a new workbook.
     workbook = Workbook()
 
-    # Remove the default worksheet created by OpenPyXL.
-    default_sheet = workbook.active
-    workbook.remove(default_sheet)
+    try:
+        # Remove the default worksheet created by OpenPyXL.
+        default_sheet = workbook.active
+        workbook.remove(default_sheet)
 
-    # Step 6: Create the four worksheets.
-    employee_ws = workbook.create_sheet(EMPLOYEE_SHEET)
-    expense_ws = workbook.create_sheet(EXPENSE_SHEET)
-    calculator_ws = workbook.create_sheet(CALCULATOR_SHEET)
-    summary_ws = workbook.create_sheet(SUMMARY_SHEET)
+        # Step 6: Create the four worksheets.
+        employee_ws = workbook.create_sheet(EMPLOYEE_SHEET)
+        expense_ws = workbook.create_sheet(EXPENSE_SHEET)
+        calculator_ws = workbook.create_sheet(CALCULATOR_SHEET)
+        summary_ws = workbook.create_sheet(SUMMARY_SHEET)
 
-    # Step 7: Add worksheet titles.
-    employee_ws[EMPLOYEE_TITLE_CELL] = EMPLOYEE_SHEET
-    expense_ws[EXPENSE_TITLE_CELL] = EXPENSE_SHEET
-    calculator_ws[CALCULATOR_TITLE_CELL] = CALCULATOR_SHEET
-    summary_ws[SUMMARY_TITLE_CELL] = SUMMARY_SHEET
+        # Step 7: Add worksheet titles.
+        employee_ws[EMPLOYEE_TITLE_CELL] = EMPLOYEE_SHEET
+        expense_ws[EXPENSE_TITLE_CELL] = EXPENSE_SHEET
+        calculator_ws[CALCULATOR_TITLE_CELL] = CALCULATOR_SHEET
+        summary_ws[SUMMARY_TITLE_CELL] = SUMMARY_SHEET
 
-    # Step 8: Save the workbook.
-    workbook.save(file_path)
+        # Step 8: Apply worksheet formatting.
+        format_workbook(workbook)
 
-    # Step 9: Return information about the created workbook.
+        # Step 9: Add formulas for automatic calculations.
+        add_workbook_formulas(workbook)
+
+        # Step 10: Add dropdowns and input validations.
+        add_workbook_validations(workbook)
+
+        # Step 11: Save the completed workbook.
+        workbook.save(file_path)
+
+    finally:
+        workbook.close()
+
+    # Step 12: Return information about the created workbook.
     return {
         "status": "success",
         "message": "Workbook created successfully.",
         "file_name": filename,
         "file_path": str(file_path),
-        "worksheets": workbook.sheetnames,
+        "worksheets": [
+            EMPLOYEE_SHEET,
+            EXPENSE_SHEET,
+            CALCULATOR_SHEET,
+            SUMMARY_SHEET,
+        ],
     }
