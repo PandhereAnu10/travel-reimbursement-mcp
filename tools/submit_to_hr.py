@@ -1,11 +1,13 @@
 
 import re
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from zipfile import BadZipFile
 
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+
+from tools.create_excel import OUTPUT_DIR
 
 from templates.reimbursement import (
     EMPLOYEE_SHEET,
@@ -31,13 +33,6 @@ from tools.common_func import (
     validate_expense_amount,
     validate_text,
     validate_expense_headers,
-)
-
-
-OUTPUT_DIR = (
-    Path(__file__).resolve().parent.parent
-    / "data"
-    / "generated"
 )
 
 
@@ -209,6 +204,7 @@ def submit_to_hr(filename: str) -> dict:
         # Ensure at least one complete expense record exists.
         expense_count = 0
         incomplete_expenses = []
+        seen_expense_ids = set()
 
         for row in range(EXPENSE_FIRST_ROW, EXPENSE_LAST_ROW + 1):
             expense_id = expense_sheet.cell(
@@ -265,11 +261,35 @@ def submit_to_hr(filename: str) -> dict:
                 })
                 continue
 
-            validate_text(expense_id, "Expense ID")
-            validate_expense_date(expense_date)
-            validate_text(category, "Category")
+            expense_id = validate_text(expense_id, "Expense ID")
+            expense_date = validate_expense_date(expense_date)
+            category = validate_text(category, "Category")
             validate_text(description, "Description")
             validate_expense_amount(amount)
+
+            if receipt not in (None, ""):
+                validate_text(receipt, "Receipt reference")
+
+            # Check for duplicate expense IDs.
+            normalized_expense_id = expense_id.casefold()
+
+            if normalized_expense_id in seen_expense_ids:
+                return {
+                    "status": "error",
+                    "message": f"Duplicate expense ID '{expense_id}' found in row {row}.",
+                }
+
+            seen_expense_ids.add(normalized_expense_id)
+
+            # Ensure expense date falls within the travel period.
+            if not start_date <= expense_date <= end_date:
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Expense date in row {row} must fall between "
+                        "the travel start date and travel end date."
+                    ),
+                }
 
             if category not in EXPENSE_CATEGORIES:
                 return {
@@ -348,10 +368,16 @@ def submit_to_hr(filename: str) -> dict:
             "message": "Workbook could not be saved. Check whether it is open in Excel.",
         }
 
-    except Exception as error:
+    except OSError:
         return {
             "status": "error",
-            "message": f"Claim submission failed: {error}",
+            "message": "A file operation failed while submitting the claim.",
+        }
+
+    except Exception:
+        return {
+            "status": "error",
+            "message": "An unexpected error occurred while submitting the claim.",
         }
 
     finally:
