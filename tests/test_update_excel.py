@@ -16,44 +16,7 @@ from templates.reimbursement import (
     SUMMARY_SHEET,
 )
 
-
-@pytest.fixture
-def reimbursement_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        create_excel_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    monkeypatch.setattr(
-        update_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    create_excel_module.create_excel("test.xlsx")
-
-    file_path = tmp_path / "test.xlsx"
-
-    workbook = load_workbook(file_path)
-    worksheet = workbook[EXPENSE_SHEET]
-
-    row = EXPENSE_FIRST_ROW
-
-    worksheet.cell(row, EXPENSE_COLUMNS["expense_id"]).value = "EXP001"
-    worksheet.cell(row, EXPENSE_COLUMNS["date"]).value = date(2026, 11, 20)
-    worksheet.cell(row, EXPENSE_COLUMNS["category"]).value = "Transport"
-    worksheet.cell(row, EXPENSE_COLUMNS["description"]).value = "Taxi fare"
-    worksheet.cell(row, EXPENSE_COLUMNS["amount"]).value = 500
-    worksheet.cell(row, EXPENSE_COLUMNS["receipt_reference"]).value = "REC001"
-
-    workbook.save(file_path)
-    workbook.close()
-
-    return file_path
-
-
-def test_update_expense_record(reimbursement_file):
+def test_update_expense_record(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -66,7 +29,7 @@ def test_update_expense_record(reimbursement_file):
     assert result["status"] == "success"
     assert result["updated_fields"] == ["description", "amount"]
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
     worksheet = workbook[EXPENSE_SHEET]
 
     assert worksheet.cell(
@@ -82,7 +45,7 @@ def test_update_expense_record(reimbursement_file):
     workbook.close()
 
 
-def test_update_expense_date(reimbursement_file):
+def test_update_expense_date(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -91,7 +54,7 @@ def test_update_expense_date(reimbursement_file):
 
     assert result["status"] == "success"
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
     worksheet = workbook[EXPENSE_SHEET]
 
     assert worksheet.cell(
@@ -102,7 +65,7 @@ def test_update_expense_date(reimbursement_file):
     workbook.close()
 
 
-def test_update_expense_category(reimbursement_file):
+def test_update_expense_category(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -111,7 +74,7 @@ def test_update_expense_category(reimbursement_file):
 
     assert result["status"] == "success"
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
     worksheet = workbook[EXPENSE_SHEET]
 
     assert worksheet.cell(
@@ -122,7 +85,7 @@ def test_update_expense_category(reimbursement_file):
     workbook.close()
 
 
-def test_clear_receipt_reference(reimbursement_file):
+def test_clear_receipt_reference(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -131,7 +94,7 @@ def test_clear_receipt_reference(reimbursement_file):
 
     assert result["status"] == "success"
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
     worksheet = workbook[EXPENSE_SHEET]
 
     assert worksheet.cell(
@@ -142,7 +105,7 @@ def test_clear_receipt_reference(reimbursement_file):
     workbook.close()
 
 
-def test_reject_missing_expense_id(reimbursement_file):
+def test_reject_missing_expense_id(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         updates={"amount": 700},
@@ -152,7 +115,7 @@ def test_reject_missing_expense_id(reimbursement_file):
     assert "Expense ID" in result["message"]
 
 
-def test_reject_missing_updates(reimbursement_file):
+def test_reject_missing_updates(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -161,7 +124,7 @@ def test_reject_missing_updates(reimbursement_file):
     assert result["status"] == "error"
 
 
-def test_reject_unsupported_update_field(reimbursement_file):
+def test_reject_unsupported_update_field(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -172,7 +135,7 @@ def test_reject_unsupported_update_field(reimbursement_file):
     assert "Unsupported update fields" in result["message"]
 
 
-def test_reject_invalid_expense_category(reimbursement_file):
+def test_reject_invalid_expense_category(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -183,7 +146,7 @@ def test_reject_invalid_expense_category(reimbursement_file):
     assert "Invalid category" in result["message"]
 
 
-def test_reject_negative_expense_amount(reimbursement_file):
+def test_reject_negative_expense_amount(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -193,7 +156,7 @@ def test_reject_negative_expense_amount(reimbursement_file):
     assert result["status"] == "error"
 
 
-def test_reject_nonexistent_expense_id(reimbursement_file):
+def test_reject_nonexistent_expense_id(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         expense_id="EXP999",
@@ -204,7 +167,7 @@ def test_reject_nonexistent_expense_id(reimbursement_file):
     assert "not found" in result["message"]
 
 
-def test_update_employee_information(reimbursement_file):
+def test_update_employee_information(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         employee_updates={
@@ -216,7 +179,7 @@ def test_update_employee_information(reimbursement_file):
     assert result["status"] == "success"
     assert "employee_name" in result["updated_fields"]
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
     worksheet = workbook[EMPLOYEE_SHEET]
 
     assert worksheet[
@@ -230,7 +193,7 @@ def test_update_employee_information(reimbursement_file):
     workbook.close()
 
 
-def test_update_declaration_only(reimbursement_file):
+def test_update_declaration_only(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         declaration="Yes",
@@ -239,14 +202,14 @@ def test_update_declaration_only(reimbursement_file):
     assert result["status"] == "success"
     assert result["declaration"] == "Yes"
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
 
     assert workbook[SUMMARY_SHEET][DECLARATION_CELL].value == "Yes"
 
     workbook.close()
 
 
-def test_update_employee_information_and_declaration(reimbursement_file):
+def test_update_employee_information_and_declaration(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         employee_updates={
@@ -258,7 +221,7 @@ def test_update_employee_information_and_declaration(reimbursement_file):
     assert result["status"] == "success"
     assert result["declaration"] == "Yes"
 
-    workbook = load_workbook(reimbursement_file)
+    workbook = load_workbook(reimbursement_file_with_expense)
 
     assert workbook[EMPLOYEE_SHEET][
         EMPLOYEE_FIELDS["employee_name"]["cell"]
@@ -269,7 +232,7 @@ def test_update_employee_information_and_declaration(reimbursement_file):
     workbook.close()
 
 
-def test_reject_invalid_employee_field(reimbursement_file):
+def test_reject_invalid_employee_field(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         employee_updates={
@@ -285,7 +248,7 @@ def test_reject_invalid_employee_field(reimbursement_file):
     "travel_days",
     [0, -1, 1.5, True, "invalid"],
 )
-def test_reject_invalid_travel_days(reimbursement_file, travel_days):
+def test_reject_invalid_travel_days(reimbursement_file_with_expense, travel_days):
     result = update_module.update_excel(
         filename="test.xlsx",
         employee_updates={
@@ -297,7 +260,7 @@ def test_reject_invalid_travel_days(reimbursement_file, travel_days):
     assert "Travel days" in result["message"]
 
 
-def test_reject_end_date_before_start_date(reimbursement_file):
+def test_reject_end_date_before_start_date(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         employee_updates={
@@ -310,7 +273,7 @@ def test_reject_end_date_before_start_date(reimbursement_file):
     assert "Travel end date" in result["message"]
 
 
-def test_reject_invalid_declaration(reimbursement_file):
+def test_reject_invalid_declaration(reimbursement_file_with_expense):
     result = update_module.update_excel(
         filename="test.xlsx",
         declaration="Maybe",

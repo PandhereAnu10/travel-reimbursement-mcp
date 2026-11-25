@@ -8,25 +8,6 @@ import tools.calculate_expense as calculate_module
 from templates.reimbursement import CALCULATOR_SHEET
 
 
-@pytest.fixture
-def reimbursement_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        create_excel_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    monkeypatch.setattr(
-        calculate_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    create_excel_module.create_excel("test.xlsx")
-
-    return tmp_path / "test.xlsx"
-
-
 def test_mileage_calculation(reimbursement_file):
     result = calculate_module.calculate_expense(
         filename="test.xlsx",
@@ -224,20 +205,14 @@ def test_reject_invalid_quick_calculation_operation(
     assert result["status"] == "error"
 
 
-def test_calculate_for_missing_workbook(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        calculate_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
+def test_calculate_for_missing_workbook(output_dir):
     result = calculate_module.calculate_expense(
         filename="missing.xlsx",
         calculation_type="mileage",
         distance_km=100,
         rate_per_km=10,
     )
-
+    
     assert result["status"] == "error"
     assert "not found" in result["message"].lower()
 

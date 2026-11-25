@@ -5,8 +5,8 @@ from openpyxl import Workbook
 import tools.read_excel as read_excel_module
 
 
-def create_test_workbook(tmp_path):
-    file_path = tmp_path / "test.xlsx"
+def create_test_workbook(output_dir):
+    file_path = output_dir / "test.xlsx"
 
     workbook = Workbook()
     worksheet = workbook.active
@@ -26,9 +26,8 @@ def create_test_workbook(tmp_path):
     return file_path
 
 
-def test_read_all_worksheets(tmp_path, monkeypatch):
-    create_test_workbook(tmp_path)
-    monkeypatch.setattr(read_excel_module, "OUTPUT_DIR", tmp_path)
+def test_read_all_worksheets(output_dir):
+    create_test_workbook(output_dir)
 
     result = read_excel_module.read_excel("test.xlsx")
 

@@ -11,11 +11,9 @@ def create_workbook(file_path, sheet_name="Sheet1"):
     workbook.close()
 
 
-def test_list_excel_files(tmp_path, monkeypatch):
-    create_workbook(tmp_path / "first.xlsx")
-    create_workbook(tmp_path / "second.xlsx")
-
-    monkeypatch.setattr(list_module, "OUTPUT_DIR", tmp_path)
+def test_list_excel_files(output_dir):
+    create_workbook(output_dir / "first.xlsx")
+    create_workbook(output_dir / "second.xlsx")
 
     result = list_module.list_excel_files()
 
@@ -30,13 +28,11 @@ def test_list_excel_files(tmp_path, monkeypatch):
     assert "second.xlsx" in filenames
 
 
-def test_list_excel_file_details(tmp_path, monkeypatch):
+def test_list_excel_file_details(output_dir):
     create_workbook(
-        tmp_path / "reimbursement.xlsx",
+        output_dir / "reimbursement.xlsx",
         sheet_name="Employee",
     )
-
-    monkeypatch.setattr(list_module, "OUTPUT_DIR", tmp_path)
 
     result = list_module.list_excel_files()
 
@@ -51,14 +47,12 @@ def test_list_excel_file_details(tmp_path, monkeypatch):
     assert "Employee" in file_info["worksheets"]
 
 
-def test_ignore_non_excel_files(tmp_path, monkeypatch):
-    create_workbook(tmp_path / "valid.xlsx")
+def test_ignore_non_excel_files(output_dir):
+    create_workbook(output_dir / "valid.xlsx")
 
-    (tmp_path / "notes.txt").write_text(
+    (output_dir / "notes.txt").write_text(
         "This is not an Excel file."
     )
-
-    monkeypatch.setattr(list_module, "OUTPUT_DIR", tmp_path)
 
     result = list_module.list_excel_files()
 
@@ -71,12 +65,10 @@ def test_ignore_non_excel_files(tmp_path, monkeypatch):
     assert "notes.txt" not in filenames
 
 
-def test_ignore_temporary_excel_files(tmp_path, monkeypatch):
-    create_workbook(tmp_path / "valid.xlsx")
+def test_ignore_temporary_excel_files(output_dir):
+    create_workbook(output_dir / "valid.xlsx")
 
-    (tmp_path / "~$temporary.xlsx").write_text("Temporary file")
-
-    monkeypatch.setattr(list_module, "OUTPUT_DIR", tmp_path)
+    (output_dir / "~$temporary.xlsx").write_text("Temporary file")
 
     result = list_module.list_excel_files()
 
@@ -89,9 +81,7 @@ def test_ignore_temporary_excel_files(tmp_path, monkeypatch):
     assert "~$temporary.xlsx" not in filenames
 
 
-def test_empty_output_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(list_module, "OUTPUT_DIR", tmp_path)
-
+def test_empty_output_directory(output_dir):
     result = list_module.list_excel_files()
 
     assert result["status"] == "success"

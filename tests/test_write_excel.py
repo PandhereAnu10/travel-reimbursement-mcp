@@ -16,25 +16,6 @@ from templates.reimbursement import (
 )
 
 
-@pytest.fixture
-def reimbursement_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        create_excel_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    monkeypatch.setattr(
-        write_excel_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
-
-    create_excel_module.create_excel("test.xlsx")
-
-    return tmp_path / "test.xlsx"
-
-
 def test_write_expense_record(reimbursement_file):
     result = write_excel_module.write_excel(
         filename="test.xlsx",
@@ -226,12 +207,7 @@ def test_reject_invalid_declaration(reimbursement_file):
     assert result["status"] == "error"
 
 
-def test_write_to_missing_workbook(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        write_excel_module,
-        "OUTPUT_DIR",
-        tmp_path,
-    )
+def test_write_to_missing_workbook(output_dir):
 
     result = write_excel_module.write_excel(
         filename="missing.xlsx",

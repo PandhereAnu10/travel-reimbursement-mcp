@@ -23,56 +23,6 @@ from templates.reimbursement import (
 )
 
 
-@pytest.fixture
-def valid_claim(tmp_path, monkeypatch):
-    monkeypatch.setattr(create_excel_module, "OUTPUT_DIR", tmp_path)
-    monkeypatch.setattr(submit_module, "OUTPUT_DIR", tmp_path)
-
-    filename = "test_claim.xlsx"
-    result = create_excel_module.create_excel(filename)
-
-    assert result["status"] == "success"
-
-    file_path = tmp_path / filename
-    workbook = load_workbook(file_path)
-
-    employee_sheet = workbook[EMPLOYEE_SHEET]
-
-    for field in REQUIRED_EMPLOYEE_FIELDS:
-        cell = EMPLOYEE_FIELDS[field]["cell"]
-
-        if field == "travel_start_date":
-            employee_sheet[cell] = date(2026, 11, 20)
-        elif field == "travel_end_date":
-            employee_sheet[cell] = date(2026, 11, 22)
-        else:
-            employee_sheet[cell] = f"Test {field}"
-
-    expense_sheet = workbook[EXPENSE_SHEET]
-
-    expense_values = {
-        "expense_id": "EXP-001",
-        "date": date(2026, 11, 21),
-        "category": "Transport",
-        "description": "Taxi fare",
-        "amount": 500,
-        "receipt_reference": "receipt-001",
-    }
-
-    for field, value in expense_values.items():
-        expense_sheet.cell(
-            EXPENSE_FIRST_ROW,
-            EXPENSE_COLUMNS[field],
-        ).value = value
-
-    workbook[SUMMARY_SHEET][DECLARATION_CELL] = "Yes"
-
-    workbook.save(file_path)
-    workbook.close()
-
-    return file_path
-
-
 def test_submit_valid_claim(valid_claim):
     result = submit_module.submit_to_hr(valid_claim.name)
 
