@@ -7,6 +7,7 @@ from tools.list_excel_files import list_excel_files
 from tools.write_excel import write_excel
 from tools.update_excel import update_excel
 from tools.submit_to_hr import submit_to_hr
+from tools.calculate_expense import calculate_expense
 
 
 # Initialize the MCP server
@@ -135,6 +136,44 @@ def update_excel_tool(
 def submit_to_hr_tool(filename: str) -> dict:
     return submit_to_hr(filename=filename)
 
+@mcp.tool(
+    name="calculate_expense",
+    description=(
+        "Calculate travel expenses using mileage, per diem, "
+        "currency conversion, or basic arithmetic operations. "
+        "Saves calculation inputs and results in the workbook's "
+        "Expense Calculator worksheet. Supports addition, "
+        "subtraction, multiplication, and division."
+    ),
+)
+def calculate_expense_tool(
+    filename: str,
+    calculation_type: str,
+    distance_km: float = None,
+    rate_per_km: float = None,
+    travel_days: float = None,
+    daily_allowance: float = None,
+    foreign_amount: float = None,
+    exchange_rate: float = None,
+    currency_code: str = "",
+    number1: float = None,
+    number2: float = None,
+    operation: str = None,
+) -> dict:
+    return calculate_expense(
+        filename=filename,
+        calculation_type=calculation_type,
+        distance_km=distance_km,
+        rate_per_km=rate_per_km,
+        travel_days=travel_days,
+        daily_allowance=daily_allowance,
+        foreign_amount=foreign_amount,
+        exchange_rate=exchange_rate,
+        currency_code=currency_code,
+        number1=number1,
+        number2=number2,
+        operation=operation,
+    )
 
 
 if __name__ == "__main__":
