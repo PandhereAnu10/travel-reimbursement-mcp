@@ -5,6 +5,10 @@ from zipfile import BadZipFile
 from openpyxl.utils.exceptions import InvalidFileException
 
 from templates.reimbursement import (
+    EMPLOYEE_SHEET,
+    EMPLOYEE_FIELDS,
+    DECLARATION_CELL,
+    DECLARATION_OPTIONS,
     EXPENSE_SHEET,
     EXPENSE_HEADER_ROW,
     EXPENSE_FIRST_ROW,
@@ -14,6 +18,7 @@ from templates.reimbursement import (
     EXPENSE_CATEGORIES,
     DATE_FORMAT,
     CURRENCY_FORMAT,
+    SUMMARY_SHEET,
 )
 
 from tools.common_func import (
@@ -34,8 +39,10 @@ EDITABLE_FIELDS = {
 
 def update_excel(
     filename: str,
-    expense_id: str,
-    updates: dict,
+    expense_id: str = "",
+    updates: dict = None,
+    employee_updates: dict = None,
+    declaration: str = None,
 ) -> dict:
     # Update selected fields of an existing expense record
 
@@ -116,6 +123,82 @@ def update_excel(
 
         # 5. Open workbook.
         workbook = load_workbook(file_path)
+        
+                # Handle employee and travel information updates.
+        if employee_updates is not None or declaration is not None:
+
+            if employee_updates is not None:
+                if not isinstance(employee_updates, dict) or not employee_updates:
+                    raise ValueError(
+                        "Employee updates must be a non-empty dictionary."
+                    )
+
+                invalid_fields = (
+                    set(employee_updates.keys()) - set(EMPLOYEE_FIELDS.keys())
+                )
+
+                if invalid_fields:
+                    raise ValueError(
+                        f"Unsupported employee fields: {sorted(invalid_fields)}"
+                    )
+
+                if EMPLOYEE_SHEET not in workbook.sheetnames:
+                    raise ValueError(
+                        f"Worksheet '{EMPLOYEE_SHEET}' does not exist."
+                    )
+
+                employee_sheet = workbook[EMPLOYEE_SHEET]
+
+                for field, value in employee_updates.items():
+                    if value is None:
+                        raise ValueError(
+                            f"Value for '{field}' cannot be null."
+                        )
+
+                    if field in ("travel_start_date", "travel_end_date"):
+                        value = validate_expense_date(value)
+
+                    elif field == "travel_days":
+                        value = int(value)
+                        if value <= 0:
+                            raise ValueError(
+                                "Travel days must be greater than zero."
+                            )
+
+                    else:
+                        value = validate_text(
+                            value, EMPLOYEE_FIELDS[field]["label"]
+                        )
+
+                    cell = EMPLOYEE_FIELDS[field]["cell"]
+                    employee_sheet[cell] = value
+
+                    if field in ("travel_start_date", "travel_end_date"):
+                        employee_sheet[cell].number_format = DATE_FORMAT
+
+            if declaration is not None:
+                if declaration not in DECLARATION_OPTIONS:
+                    raise ValueError(
+                        f"Declaration must be one of {DECLARATION_OPTIONS}."
+                    )
+
+                if SUMMARY_SHEET not in workbook.sheetnames:
+                    raise ValueError(
+                        f"Worksheet '{SUMMARY_SHEET}' does not exist."
+                    )
+
+                workbook[SUMMARY_SHEET][DECLARATION_CELL] = declaration
+
+            save_workbook_safely(workbook, file_path)
+
+            return {
+                "status": "success",
+                "filename": filename,
+                "message": "Employee and travel information updated successfully.",
+                "updated_fields": list(employee_updates.keys())
+                    if employee_updates else [],
+                "declaration": declaration,
+            }
 
         if EXPENSE_SHEET not in workbook.sheetnames:
             raise ValueError(

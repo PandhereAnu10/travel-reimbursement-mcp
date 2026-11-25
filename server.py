@@ -6,6 +6,7 @@ from tools.read_excel import read_excel as read_excel_workbook
 from tools.list_excel_files import list_excel_files
 from tools.write_excel import write_excel
 from tools.update_excel import update_excel
+from tools.submit_to_hr import submit_to_hr
 
 
 # Initialize the MCP server
@@ -73,12 +74,14 @@ def list_excel_files_tool() -> dict:
 )
 def write_excel_tool(
     filename: str,
-    expense_id: str,
-    expense_date: str,
-    category: str,
-    description: str,
-    amount: float,
+    expense_id: str = "",
+    expense_date: str = "",
+    category: str = "",
+    description: str = "",
+    amount: float = None,
     receipt_reference: str = "",
+    employee_info: dict = None,
+    declaration: str = None,
 ) -> dict:
     return write_excel(
         filename=filename,
@@ -88,8 +91,9 @@ def write_excel_tool(
         description=description,
         amount=amount,
         receipt_reference=receipt_reference,
+        employee_info=employee_info,
+        declaration=declaration,
     )
-
 
 # Excel workbook update tool
 @mcp.tool(
@@ -103,15 +107,34 @@ def write_excel_tool(
 )
 def update_excel_tool(
     filename: str,
-    expense_id: str,
-    updates: dict,
+    expense_id: str = "",
+    updates: dict = None,
+    employee_updates: dict = None,
+    declaration: str = None,
 ) -> dict:
-    """Update an existing expense record."""
     return update_excel(
         filename=filename,
         expense_id=expense_id,
         updates=updates,
+        employee_updates=employee_updates,
+        declaration=declaration,
     )
+
+
+# Submit reimbursement claim to HR
+@mcp.tool(
+    name="submit_to_hr",
+    description=(
+        "Validate and submit a travel reimbursement claim to HR. "
+        "Checks required employee and travel information, at least one "
+        "expense record, and employee declaration before submission. "
+        "On success, updates the claim status, submission date, "
+        "and unique claim reference in the workbook."
+    ),
+)
+def submit_to_hr_tool(filename: str) -> dict:
+    return submit_to_hr(filename=filename)
+
 
 
 if __name__ == "__main__":

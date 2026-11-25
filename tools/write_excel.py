@@ -6,6 +6,10 @@ from zipfile import BadZipFile
 from openpyxl.utils.exceptions import InvalidFileException
 
 from templates.reimbursement import (
+    EMPLOYEE_SHEET,
+    EMPLOYEE_FIELDS,
+    DECLARATION_CELL,
+    DECLARATION_OPTIONS,
     EXPENSE_SHEET,
     EXPENSE_FIRST_ROW,
     EXPENSE_LAST_ROW,
@@ -13,6 +17,7 @@ from templates.reimbursement import (
     EXPENSE_CATEGORIES,
     DATE_FORMAT,
     CURRENCY_FORMAT,
+    SUMMARY_SHEET,
 )
 
 from tools.common_func import (
@@ -25,12 +30,14 @@ from tools.common_func import (
 
 def write_excel(
     filename: str,
-    expense_id: str,
-    expense_date: str,
-    category: str,
-    description: str,
-    amount: float,
+    expense_id: str = "",
+    expense_date: str = "",
+    category: str = "",
+    description: str = "",
+    amount: float = None,
     receipt_reference: str = "",
+    employee_info: dict = None,
+    declaration: str = None,
 ) -> dict:
     # Add a new expense record
 
@@ -46,7 +53,91 @@ def write_excel(
                 f"Workbook '{filename}' was not found."
             )
 
-        # 2. Validate input fields.
+        # 2. Open workbook.
+        workbook = load_workbook(file_path)
+        
+        # 3. Handle employee and travel information.
+        if employee_info is not None or declaration is not None:
+
+            if EMPLOYEE_SHEET not in workbook.sheetnames:
+                raise ValueError(
+                    f"Worksheet '{EMPLOYEE_SHEET}' does not exist."
+                )
+
+            employee_sheet = workbook[EMPLOYEE_SHEET]
+
+            if employee_info is not None:
+                if not isinstance(employee_info, dict) or not employee_info:
+                    raise ValueError(
+                        "Employee information must be a non-empty dictionary."
+                    )
+
+                invalid_fields = (
+                    set(employee_info.keys()) - set(EMPLOYEE_FIELDS.keys())
+                )
+
+                if invalid_fields:
+                    raise ValueError(
+                        f"Unsupported employee fields: {sorted(invalid_fields)}"
+                    )
+
+                validated_info = {}
+
+                for field, value in employee_info.items():
+                    if value is None:
+                        raise ValueError(
+                            f"Value for '{field}' cannot be null."
+                        )
+
+                    if field in ("travel_start_date", "travel_end_date"):
+                        validated_info[field] = validate_expense_date(value)
+
+                    elif field == "travel_days":
+                        days = int(value)
+                        if days <= 0:
+                            raise ValueError(
+                                "Travel days must be greater than zero."
+                            )
+                        validated_info[field] = days
+
+                    else:
+                        validated_info[field] = validate_text(
+                            value, EMPLOYEE_FIELDS[field]["label"]
+                        )
+
+                for field, value in validated_info.items():
+                    cell = EMPLOYEE_FIELDS[field]["cell"]
+                    employee_sheet[cell] = value
+
+                    if field in ("travel_start_date", "travel_end_date"):
+                        employee_sheet[cell].number_format = DATE_FORMAT
+
+            if declaration is not None:
+                if declaration not in DECLARATION_OPTIONS:
+                    raise ValueError(
+                        f"Declaration must be one of {DECLARATION_OPTIONS}."
+                    )
+
+                if SUMMARY_SHEET not in workbook.sheetnames:
+                    raise ValueError(
+                        f"Worksheet '{SUMMARY_SHEET}' does not exist."
+                    )
+
+                workbook[SUMMARY_SHEET][DECLARATION_CELL] = declaration
+
+            save_workbook_safely(workbook, file_path)
+
+            return {
+                "status": "success",
+                "filename": filename,
+                "message": "Employee and travel information saved successfully.",
+                "updated_fields": list(employee_info.keys())
+                    if employee_info else [],
+                "declaration": declaration,
+            }
+
+        
+        # 4. Validate input fields.
         expense_id = validate_text(
             expense_id,
             "Expense ID",
@@ -87,9 +178,6 @@ def write_excel(
                 "spreadsheet command character."
             )
 
-        # 3. Open workbook.
-        workbook = load_workbook(file_path)
-
         if EXPENSE_SHEET not in workbook.sheetnames:
             raise ValueError(
                 f"Worksheet '{EXPENSE_SHEET}' does not exist."
@@ -97,12 +185,12 @@ def write_excel(
 
         worksheet = workbook[EXPENSE_SHEET]
 
-        # 4. Verify worksheet structure.
+        # 5. Verify worksheet structure.
         validate_expense_headers(worksheet)
 
         id_column = EXPENSE_COLUMNS["expense_id"]
 
-        # 5. Check for duplicate Expense IDs.
+        # 6. Check for duplicate Expense IDs.
         for row in range(
             EXPENSE_FIRST_ROW,
             EXPENSE_LAST_ROW + 1,
@@ -121,7 +209,7 @@ def write_excel(
                     f"Expense ID '{expense_id}' already exists."
                 )
 
-        # 6. Find the next completely empty expense row.
+        # 7. Find the next completely empty expense row.
         target_row = None
 
         editable_columns = [
@@ -153,7 +241,7 @@ def write_excel(
                 "No empty expense rows remain."
             )
 
-        # 7. Write only the six editable columns.
+        # 8. Write only the six editable columns.
         # The existing Date Check formula in column G is untouched.
         values = {
             "expense_id": expense_id,
@@ -171,7 +259,7 @@ def write_excel(
                 column=column,
             ).value = value
 
-        # 8. Apply configured display formats.
+        # 9. Apply configured display formats.
         worksheet.cell(
             row=target_row,
             column=EXPENSE_COLUMNS["date"],
@@ -182,7 +270,7 @@ def write_excel(
             column=EXPENSE_COLUMNS["amount"],
         ).number_format = CURRENCY_FORMAT
 
-        # 9. Save safely.
+        # 10. Save safely.
         save_workbook_safely(workbook, file_path)
 
         return {

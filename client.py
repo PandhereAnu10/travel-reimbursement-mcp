@@ -105,8 +105,6 @@ async def main():
         user_prompt = input("\nWhat would you like to do? ")
 
         messages = [
-            
-            
             {
                 "role": "system",
                 "content": (
@@ -181,6 +179,25 @@ async def main():
                     "8. Use one update_excel call for the specified existing expense "
                     "and include all requested changes in its updates dictionary.\n\n"
 
+                    "CLAIM SUBMISSION RULES:\n"
+                    "1. If the user explicitly asks to submit, finalize, "
+                    "or send a reimbursement claim to HR, call submit_to_hr.\n"
+                    "2. The submit_to_hr tool requires the existing workbook filename.\n"
+                    "3. Never create a new workbook just to submit a claim.\n"
+                    "4. Never submit a claim automatically after adding or updating "
+                    "an expense.\n"
+                    "5. The tool validates required employee and travel information, "
+                    "at least one expense record, and employee declaration.\n"
+                    "6. If required information is missing, explain exactly which "
+                    "fields need to be completed. Do not invent values.\n"
+                    "7. The employee declaration must be accepted before submission.\n"
+                    "8. A successful submission returns the submission status, "
+                    "submission date, and unique claim reference.\n"
+                    "9. If the claim is already submitted, report its existing "
+                    "status and reference. Do not create a duplicate submission.\n"
+                    "10. Never claim that a claim was submitted unless the "
+                    "submit_to_hr tool confirms success.\n\n"
+
                     "EXECUTION RULES:\n"
                     "1. Use available MCP tools to perform requested operations.\n"
                     "2. Pass the correct arguments required by the selected tool.\n"
@@ -207,7 +224,6 @@ async def main():
                     "14. Do not fabricate tool results or execution confirmations.\n"
                 ),
             },
-
             {
                 "role": "user",
                 "content": user_prompt,
