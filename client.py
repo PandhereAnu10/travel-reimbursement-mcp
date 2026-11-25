@@ -1,6 +1,5 @@
 
 import asyncio
-import sys
 from pathlib import Path
 import json
 import os
@@ -10,7 +9,7 @@ from datetime import date
 
 from templates.reimbursement import REQUIRED_EMPLOYEE_FIELDS
 
-from mcp import Client, StdioServerParameters
+from mcp import Client
 from dotenv import load_dotenv
 from litellm import acompletion
 
@@ -22,11 +21,8 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL")
 
-# MCP server config
-SERVER_PARAMS = StdioServerParameters(
-    command=sys.executable,
-    args=[str(PROJECT_DIR / "server.py")],
-)
+# MCP Streamable HTTP server endpoint. Start server.py in a separate terminal.
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
 
 
 def convert_mcp_tools_to_llm_tools(mcp_tools):
@@ -82,6 +78,8 @@ def clean_assistant_response(content):
     if not content:
         return ""
 
+    # Remove only complete thinking blocks. An unmatched opening tag should
+    # not cause the entire user-facing answer to be discarded.
     content = re.sub(
         r"<think>.*?</think>",
         "",
@@ -526,7 +524,7 @@ async def main():
 
     print("Connecting to MCP server...")
 
-    async with Client(SERVER_PARAMS) as mcp_client:
+    async with Client(MCP_SERVER_URL) as mcp_client:
 
         print("Connected successfully!")
 

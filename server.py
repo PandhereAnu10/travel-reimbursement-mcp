@@ -1,4 +1,8 @@
 
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from mcp.server import MCPServer
 
 from tools.create_excel import create_excel as create_excel_workbook
@@ -9,6 +13,10 @@ from tools.update_excel import update_excel
 from tools.submit_to_hr import submit_to_hr
 from tools.calculate_expense import calculate_expense
 
+
+# Load project configuration when the server is started in its own terminal.
+PROJECT_DIR = Path(__file__).resolve().parent
+load_dotenv(PROJECT_DIR / ".env")
 
 # Initialize the MCP server
 mcp = MCPServer("travel-reimbursement")
@@ -194,5 +202,12 @@ def calculate_expense_tool(
 
 
 if __name__ == "__main__":
-    # Runining using stdio transport by default
-    mcp.run()
+    # Run as a standalone Streamable HTTP MCP server.
+    host = os.getenv("MCP_HOST", "127.0.0.1")
+    port = int(os.getenv("MCP_PORT", "8000"))
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        streamable_http_path="/mcp",
+    )

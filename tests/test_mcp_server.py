@@ -59,7 +59,8 @@ def test_write_and_update_descriptions_explain_supported_modes(monkeypatch):
     assert "travel_days" in registered["write_excel"]["description"]
 
 
-def test_server_keeps_stdio_as_the_default_transport(monkeypatch):
+
+def test_server_uses_streamable_http_transport(monkeypatch):
     module, _ = load_server_with_mcp_stub(monkeypatch)
     source = Path(module.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -71,9 +72,22 @@ def test_server_keeps_stdio_as_the_default_transport(monkeypatch):
         and isinstance(node.test.left, ast.Name)
         and node.test.left.id == "__name__"
     )
-    run_call = main_guard.body[0].value
-    assert isinstance(run_call, ast.Call)
-    assert isinstance(run_call.func, ast.Attribute)
+
+    run_call = next(
+        node.value
+        for node in main_guard.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr == "run"
+    )
+
     assert run_call.func.attr == "run"
-    assert not run_call.args
-    assert not run_call.keywords
+
+    keywords = {
+        keyword.arg: keyword.value
+        for keyword in run_call.keywords
+    }
+
+    assert ast.literal_eval(keywords["transport"]) == "streamable-http"
+    assert ast.literal_eval(keywords["streamable_http_path"]) == "/mcp"
