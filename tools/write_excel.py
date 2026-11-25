@@ -1,5 +1,5 @@
 from openpyxl import load_workbook
-
+from decimal import Decimal, InvalidOperation
 from tools.create_excel import OUTPUT_DIR, validate_filename
 
 from zipfile import BadZipFile
@@ -93,12 +93,28 @@ def write_excel(
                         validated_info[field] = validate_expense_date(value)
 
                     elif field == "travel_days":
-                        days = int(value)
-                        if days <= 0:
+                        if isinstance(value, bool):
                             raise ValueError(
-                                "Travel days must be greater than zero."
+                                "Travel days must be a positive whole number."
                             )
-                        validated_info[field] = days
+
+                        try:
+                            days = Decimal(str(value))
+                        except (InvalidOperation, ValueError, TypeError):
+                            raise ValueError(
+                                "Travel days must be a positive whole number."
+                            )
+
+                        if (
+                            not days.is_finite()
+                            or days <= 0
+                            or days != days.to_integral_value()
+                        ):
+                            raise ValueError(
+                                "Travel days must be a positive whole number."
+                            )
+
+                        validated_info[field] = int(days)
 
                     else:
                         validated_info[field] = validate_text(

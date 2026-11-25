@@ -76,7 +76,9 @@ def read_excel(filename: str, sheet_name: str = None) -> dict:
 
                 if has_actual_data:
                     rows.append(converted_row)
-                    result[current_sheet] = rows
+
+            # Include the worksheet even if it has no actual data.
+            result[current_sheet] = rows
 
         # Step 7: Return structured data.
         return {
