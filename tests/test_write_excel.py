@@ -63,6 +63,13 @@ def test_write_employee_information(reimbursement_file):
         "employee_name": "Test User",
         "employee_id": "EMP001",
         "department": "Engineering",
+        "designation": "Engineer",
+        "email": "test@example.com",
+        "travel_purpose": "Business Meeting",
+        "source_location": "Mumbai",
+        "destination_location": "Bengaluru",
+        "travel_start_date": "2026-11-20",
+        "travel_end_date": "2026-11-22",
     }
 
     result = write_excel_module.write_excel(
@@ -78,7 +85,14 @@ def test_write_employee_information(reimbursement_file):
 
     for field, value in employee_info.items():
         cell = EMPLOYEE_FIELDS[field]["cell"]
-        assert worksheet[cell].value == value
+        actual = worksheet[cell].value
+        if field in {"travel_start_date", "travel_end_date"}:
+            assert actual.date().isoformat() == value
+        else:
+            assert actual == value
+
+    travel_days_cell = EMPLOYEE_FIELDS["travel_days"]["cell"]
+    assert worksheet[travel_days_cell].data_type == "f"
 
     workbook.close()
 
@@ -90,6 +104,15 @@ def test_write_employee_information_and_declaration(
         filename="test.xlsx",
         employee_info={
             "employee_name": "Test User",
+            "employee_id": "EMP001",
+            "department": "Engineering",
+            "designation": "Engineer",
+            "email": "test@example.com",
+            "travel_purpose": "Business Meeting",
+            "source_location": "Mumbai",
+            "destination_location": "Bengaluru",
+            "travel_start_date": "2026-11-20",
+            "travel_end_date": "2026-11-22",
         },
         declaration="Yes",
     )
@@ -105,6 +128,30 @@ def test_write_employee_information_and_declaration(
     )
 
     workbook.close()
+
+
+def test_reject_incomplete_employee_information_without_saving(reimbursement_file):
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        employee_info={"employee_name": "Test User", "employee_id": "EMP001"},
+    )
+    assert result["status"] == "error"
+    assert "Missing required fields" in result["message"]
+
+    workbook = load_workbook(reimbursement_file)
+    worksheet = workbook[EMPLOYEE_SHEET]
+    assert worksheet[EMPLOYEE_FIELDS["employee_name"]["cell"]].value is None
+    workbook.close()
+
+def test_allow_partial_employee_information_only_as_explicit_draft(reimbursement_file):
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        employee_info={"employee_name": "Test User", "employee_id": "EMP001"},
+        save_as_draft=True,
+    )
+    assert result["status"] == "success"
+    assert result["record_status"] == "Draft - incomplete"
+    assert set(result["missing_fields"]) == set(__import__("templates.reimbursement", fromlist=["REQUIRED_EMPLOYEE_FIELDS"]).REQUIRED_EMPLOYEE_FIELDS) - {"employee_name", "employee_id"}
 
 
 def test_reject_invalid_expense_category(reimbursement_file):
@@ -195,7 +242,7 @@ def test_reject_fractional_travel_days(reimbursement_file):
     )
 
     assert result["status"] == "error"
-    assert "positive whole number" in result["message"]
+    assert "calculated automatically" in result["message"]
 
 
 def test_reject_invalid_declaration(reimbursement_file):
@@ -220,3 +267,24 @@ def test_write_to_missing_workbook(output_dir):
 
     assert result["status"] == "error"
     assert "not found" in result["message"]
+
+
+def test_reject_end_date_before_start_date(reimbursement_file):
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        employee_info={
+            "employee_name": "Test User",
+            "employee_id": "EMP001",
+            "department": "Engineering",
+            "designation": "Engineer",
+            "email": "test@example.com",
+            "travel_purpose": "Business Meeting",
+            "source_location": "Mumbai",
+            "destination_location": "Bengaluru",
+            "travel_start_date": "2026-11-25",
+            "travel_end_date": "2026-11-20",
+        },
+    )
+
+    assert result["status"] == "error"
+    assert "Travel end date" in result["message"]

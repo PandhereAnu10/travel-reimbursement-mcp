@@ -205,6 +205,7 @@ def test_update_declaration_only(reimbursement_file_with_expense):
     workbook = load_workbook(reimbursement_file_with_expense)
 
     assert workbook[SUMMARY_SHEET][DECLARATION_CELL].value == "Yes"
+    assert workbook[EMPLOYEE_SHEET][EMPLOYEE_FIELDS["travel_days"]["cell"]].data_type == "f"
 
     workbook.close()
 

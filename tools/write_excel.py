@@ -1,5 +1,4 @@
 from openpyxl import load_workbook
-from decimal import Decimal, InvalidOperation
 from tools.create_excel import OUTPUT_DIR, validate_filename
 
 from zipfile import BadZipFile
@@ -10,6 +9,7 @@ from templates.reimbursement import (
     EMPLOYEE_FIELDS,
     DECLARATION_CELL,
     DECLARATION_OPTIONS,
+    REQUIRED_EMPLOYEE_FIELDS,
     EXPENSE_SHEET,
     EXPENSE_FIRST_ROW,
     EXPENSE_LAST_ROW,
@@ -38,6 +38,7 @@ def write_excel(
     receipt_reference: str = "",
     employee_info: dict = None,
     declaration: str = None,
+    save_as_draft: bool = False,
 ) -> dict:
     # Add a new expense record
 
@@ -72,6 +73,12 @@ def write_excel(
                         "Employee information must be a non-empty dictionary."
                     )
 
+                if "travel_days" in employee_info:
+                    raise ValueError(
+                        "Travel days are calculated automatically from the "
+                        "travel start and end dates; do not set travel_days directly."
+                    )
+
                 invalid_fields = (
                     set(employee_info.keys()) - set(EMPLOYEE_FIELDS.keys())
                 )
@@ -79,6 +86,22 @@ def write_excel(
                 if invalid_fields:
                     raise ValueError(
                         f"Unsupported employee fields: {sorted(invalid_fields)}"
+                    )
+
+                if not isinstance(save_as_draft, bool):
+                    raise ValueError("save_as_draft must be true or false.")
+
+                missing_fields = [
+                    field for field in REQUIRED_EMPLOYEE_FIELDS
+                    if field not in employee_info
+                    or employee_info[field] is None
+                    or (isinstance(employee_info[field], str) and not employee_info[field].strip())
+                ]
+                if missing_fields and not save_as_draft:
+                    raise ValueError(
+                        "Incomplete employee/travel information. Missing required fields: "
+                        + ", ".join(missing_fields)
+                        + ". Provide all required fields, or explicitly request save_as_draft=true."
                     )
 
                 validated_info = {}
@@ -92,33 +115,21 @@ def write_excel(
                     if field in ("travel_start_date", "travel_end_date"):
                         validated_info[field] = validate_expense_date(value)
 
-                    elif field == "travel_days":
-                        if isinstance(value, bool):
-                            raise ValueError(
-                                "Travel days must be a positive whole number."
-                            )
-
-                        try:
-                            days = Decimal(str(value))
-                        except (InvalidOperation, ValueError, TypeError):
-                            raise ValueError(
-                                "Travel days must be a positive whole number."
-                            )
-
-                        if (
-                            not days.is_finite()
-                            or days <= 0
-                            or days != days.to_integral_value()
-                        ):
-                            raise ValueError(
-                                "Travel days must be a positive whole number."
-                            )
-
-                        validated_info[field] = int(days)
-
                     else:
                         validated_info[field] = validate_text(
                             value, EMPLOYEE_FIELDS[field]["label"]
+                        )
+
+                start_cell = EMPLOYEE_FIELDS["travel_start_date"]["cell"]
+                end_cell = EMPLOYEE_FIELDS["travel_end_date"]["cell"]
+                start_date = validated_info.get("travel_start_date", employee_sheet[start_cell].value)
+                end_date = validated_info.get("travel_end_date", employee_sheet[end_cell].value)
+                if start_date and end_date:
+                    start_date = validate_expense_date(start_date)
+                    end_date = validate_expense_date(end_date)
+                    if end_date < start_date:
+                        raise ValueError(
+                            "Travel end date cannot be earlier than travel start date."
                         )
 
                 for field, value in validated_info.items():
@@ -147,8 +158,13 @@ def write_excel(
                 "status": "success",
                 "filename": filename,
                 "message": "Employee and travel information saved successfully.",
-                "updated_fields": list(employee_info.keys())
+                "updated_fields": list(validated_info.keys())
                     if employee_info else [],
+                "record_status": (
+                    "Not applicable" if employee_info is None else
+                    "Draft - incomplete" if missing_fields else "Complete"
+                ),
+                "missing_fields": missing_fields if employee_info is not None else [],
                 "declaration": declaration,
             }
 

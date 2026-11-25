@@ -16,7 +16,7 @@ def make_json_compatible(value):
     return value
 
 
-def read_excel(filename: str, sheet_name: str = None) -> dict:
+def read_excel(filename: str, sheet_name: str = None, include_formulas: bool = False) -> dict:
     # Read data from existing workbook
 
     # Step 1: Validate the filename.
@@ -52,6 +52,10 @@ def read_excel(filename: str, sheet_name: str = None) -> dict:
         )
 
         result = {}
+        contains_formulas = False
+
+        if not isinstance(include_formulas, bool):
+            raise ValueError("include_formulas must be true or false.")
 
         # Step 6: Read each selected worksheet.
         for current_sheet in selected_sheets:
@@ -59,33 +63,38 @@ def read_excel(filename: str, sheet_name: str = None) -> dict:
 
             rows = []
 
-            for row in worksheet.iter_rows(values_only=True):
-                converted_row = [
-                    make_json_compatible(value)
-                    for value in row
-                ]
+            for row in worksheet.iter_rows():
+                converted_row = []
+                for cell in row:
+                    if cell.data_type == "f" and not include_formulas:
+                        converted_row.append(None)
+                    else:
+                        converted_row.append(make_json_compatible(cell.value))
 
-                has_actual_data = any(
-                    value is not None
-                    and not (
-                        isinstance(value, str)
-                        and value.startswith("=")
-                    )
-                    for value in converted_row
-                )
-
-                if has_actual_data:
+                # Skip rows that contain no literal values (or formulas when
+                # formula inspection was explicitly requested). This prevents
+                # hundreds of formula-only rows from bloating normal reads.
+                if any(value is not None for value in converted_row):
                     rows.append(converted_row)
 
             # Include the worksheet even if it has no actual data.
             result[current_sheet] = rows
+            if any(cell.data_type == "f" for row in worksheet.iter_rows() for cell in row):
+                contains_formulas = True
 
         # Step 7: Return structured data.
-        return {
+        response = {
             "status": "success",
             "file_name": filename,
             "sheets": result,
         }
+        if contains_formulas and include_formulas:
+            response["formula_note"] = (
+                "Formula cells are returned as formula expressions because include_formulas=true. "
+                "openpyxl does not calculate formulas, and cached results may be absent; "
+                "do not present a formula as a verified calculated value."
+            )
+        return response
 
     finally:
         # Always close the workbook, including when an error occurs.

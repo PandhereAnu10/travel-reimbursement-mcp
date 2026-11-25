@@ -24,7 +24,8 @@ def test_mileage_calculation(reimbursement_file):
 
     assert worksheet["B4"].value == 100
     assert worksheet["B5"].value == 10
-    assert worksheet["C6"].value == 1000
+    assert isinstance(worksheet["C6"].value, str)
+    assert worksheet["C6"].value.startswith("=IF(")
 
     workbook.close()
 
@@ -45,7 +46,8 @@ def test_per_diem_calculation(reimbursement_file):
 
     assert worksheet["B9"].value == 5
     assert worksheet["B10"].value == 1000
-    assert worksheet["C11"].value == 5000
+    assert isinstance(worksheet["C11"].value, str)
+    assert worksheet["C11"].value.startswith("=IF(")
 
     workbook.close()
 
@@ -66,9 +68,10 @@ def test_currency_conversion(reimbursement_file):
     worksheet = workbook[CALCULATOR_SHEET]
 
     assert worksheet["B14"].value == 100
-    assert worksheet["B15"].value == 83
-    assert worksheet["B16"].value == "USD"
-    assert worksheet["C17"].value == 8300
+    assert worksheet["B15"].value == "USD"
+    assert worksheet["B16"].value == 83
+    assert isinstance(worksheet["C17"].value, str)
+    assert worksheet["C17"].value.startswith("=IF(")
 
     workbook.close()
 
@@ -106,7 +109,8 @@ def test_quick_calculation(
     assert worksheet["B20"].value == number1
     assert worksheet["B21"].value == operation
     assert worksheet["B22"].value == number2
-    assert worksheet["C23"].value == expected
+    assert isinstance(worksheet["C23"].value, str)
+    assert worksheet["C23"].value.startswith("=IF(")
 
     workbook.close()
 
@@ -232,3 +236,15 @@ def test_reject_invalid_filename(tmp_path, monkeypatch):
     )
 
     assert result["status"] == "error"
+
+
+def test_reject_fractional_per_diem_days(reimbursement_file):
+    result = calculate_module.calculate_expense(
+        filename="test.xlsx",
+        calculation_type="per_diem",
+        travel_days=2.5,
+        daily_allowance=1000,
+    )
+
+    assert result["status"] == "error"
+    assert "positive whole number" in result["message"]

@@ -4,6 +4,11 @@ import sys
 from pathlib import Path
 import json
 import os
+import re
+import math
+from datetime import date
+
+from templates.reimbursement import REQUIRED_EMPLOYEE_FIELDS
 
 from mcp import Client, StdioServerParameters
 from dotenv import load_dotenv
@@ -16,12 +21,6 @@ load_dotenv(PROJECT_DIR / ".env")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_MODEL = os.getenv("LLM_MODEL")
-
-# for missing env var
-if not all([LLM_BASE_URL, LLM_API_KEY, LLM_MODEL]):
-    raise ValueError(
-        "Missing required env variables."
-    )
 
 # MCP server config
 SERVER_PARAMS = StdioServerParameters(
@@ -65,7 +64,7 @@ def get_tool_result_text(result):
 
     content_parts = []
 
-    for item in result.content:
+    for item in (getattr(result, "content", None) or []):
         if hasattr(item, "text"):
             content_parts.append(item.text)
         else:
@@ -79,7 +78,451 @@ def get_tool_result_text(result):
         return text_result
 
 
+def clean_assistant_response(content):
+    if not content:
+        return ""
+
+    content = re.sub(
+        r"<think>.*?</think>",
+        "",
+        content,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+    return content.strip()
+
+
+def is_clarification_request(content):
+
+    if not content:
+        return False
+
+    text = content.casefold()
+    clarification_phrases = (
+        "which workbook",
+        "which file",
+        "which expense",
+        "which expense id",
+        "what is the",
+        "what's the",
+        "what date",
+        "what amount",
+        "what is your",
+        "please provide",
+        "could you provide",
+        "can you provide",
+        "could you confirm",
+        "please confirm",
+        "please tell me",
+        "could you tell me",
+        "missing information",
+        "missing field",
+        "need the",
+        "provide the",
+    )
+    return "?" in text and any(phrase in text for phrase in clarification_phrases)
+
+
+
+def format_verified_employee_write(result):
+
+    if not isinstance(result, dict) or result.get("status") != "success":
+        return None
+
+    labels = {
+        "employee_name": "Employee name",
+        "employee_id": "Employee ID",
+        "department": "Department",
+        "designation": "Designation",
+        "email": "Email",
+        "travel_purpose": "Travel purpose",
+        "source_location": "Source location",
+        "destination_location": "Destination location",
+        "travel_start_date": "Travel start date",
+        "travel_end_date": "Travel end date",
+    }
+    updated_fields = result.get("updated_fields") or []
+    lines = [
+        f"Employee/travel information was saved to {result.get('filename', 'the workbook')}."
+    ]
+    if updated_fields:
+        lines.append("Confirmed saved fields:")
+        lines.extend(f"- {labels.get(field, field)}" for field in updated_fields)
+    else:
+        lines.append("No employee fields were reported as updated.")
+
+    record_status = result.get("record_status")
+    if record_status == "Draft - incomplete":
+        missing = result.get("missing_fields") or []
+        lines.append("Record status: incomplete draft.")
+        if missing:
+            lines.append("Still missing: " + ", ".join(labels.get(field, field) for field in missing) + ".")
+    elif record_status == "Complete":
+        lines.append("Record status: complete.")
+
+    if result.get("declaration") is not None:
+        lines.append(f"Declaration recorded: {result['declaration']}.")
+    return "\n".join(lines)
+
+def validate_tool_arguments(tool, arguments, conversation_evidence=""):
+
+    if not isinstance(arguments, dict):
+        return False, "Tool arguments must be a JSON object."
+
+    schema = tool.input_schema or {}
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+
+    # Check arguments required by the MCP schema.
+    missing = [
+        field for field in required
+        if arguments.get(field) is None
+        or (
+            isinstance(arguments.get(field), str)
+            and not arguments[field].strip()
+        )
+    ]
+
+    if missing:
+        return False, f"Missing required arguments: {', '.join(missing)}"
+
+    # Reject arguments that are not part of the tool schema.
+    unknown = set(arguments.keys()) - set(properties.keys())
+
+    if unknown:
+        return False, f"Unexpected arguments: {', '.join(sorted(unknown))}"
+
+    def is_number(value):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+        try:
+            return math.isfinite(float(value)) and value >= 0
+        except (OverflowError, TypeError, ValueError):
+            return False
+
+    def non_empty_dict(value):
+        return isinstance(value, dict) and len(value) > 0
+
+    def value_was_supplied(value):
+        if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+            return False
+        normalized_value = re.sub(r"[^a-z0-9]", "", str(value).casefold())
+        normalized_evidence = re.sub(
+            r"[^a-z0-9]", "", conversation_evidence.casefold()
+        )
+        return bool(normalized_value) and normalized_value in normalized_evidence
+
+    def validate_employee_values(employee_data):
+        if "travel_days" in employee_data:
+            return False, (
+                "travel_days is calculated from travel_start_date and "
+                "travel_end_date; do not provide it as an editable field."
+            )
+        for field, value in employee_data.items():
+            if not isinstance(value, str) or not value.strip():
+                return False, f"{field} must be supplied as non-empty text."
+            if not value_was_supplied(value):
+                return False, (
+                    f"The value for '{field}' is not present in the user's "
+                    "messages or verified tool results. Ask the user to provide "
+                    "or confirm it; do not invent it."
+                )
+            if field in {"travel_start_date", "travel_end_date"}:
+                try:
+                    date.fromisoformat(value.strip())
+                except ValueError:
+                    return False, f"{field} must use YYYY-MM-DD format."
+        return True, "Employee values are grounded in the conversation."
+
+    employee_fields = {
+        "employee_name",
+        "employee_id",
+        "department",
+        "designation",
+        "email",
+        "travel_purpose",
+        "source_location",
+        "destination_location",
+        "travel_start_date",
+        "travel_end_date",
+        "travel_days",
+    }
+
+    expense_categories = {
+        "Transport",
+        "Food",
+        "Accommodation",
+        "Local Conveyance",
+        "Miscellaneous",
+    }
+
+    declaration_options = {"Yes", "No"}
+
+    # WRITE EXCEL
+    if tool.name == "write_excel":
+        employee_info = arguments.get("employee_info")
+        declaration = arguments.get("declaration")
+        save_as_draft = arguments.get("save_as_draft", False)
+
+        # Employee information / declaration operation
+        if employee_info is not None or declaration is not None:
+
+            expense_fields = {
+                "expense_id",
+                "expense_date",
+                "category",
+                "description",
+                "amount",
+                "receipt_reference",
+            }
+
+            if any(arguments.get(field) is not None for field in expense_fields):
+                return False, (
+                    "Do not combine employee/declaration updates "
+                    "with expense creation. Make separate tool calls."
+                )
+
+            if not isinstance(save_as_draft, bool):
+                return False, "save_as_draft must be true or false."
+            if save_as_draft and not value_was_supplied("draft"):
+                return False, (
+                    "Partial saving is allowed only when the user explicitly asks to save a draft. "
+                    "Ask the user to confirm a draft save instead of setting save_as_draft=true."
+                )
+
+            if employee_info is not None:
+                if not non_empty_dict(employee_info):
+                    return False, "employee_info must be a non-empty object."
+
+                missing_fields = [
+                    field for field in REQUIRED_EMPLOYEE_FIELDS
+                    if field not in employee_info
+                    or employee_info[field] is None
+                    or (isinstance(employee_info[field], str) and not employee_info[field].strip())
+                ]
+                if missing_fields and not save_as_draft:
+                    return False, (
+                        "Employee/travel record is incomplete. Missing required fields: "
+                        + ", ".join(missing_fields)
+                        + ". Recover values already supplied in the conversation; if any are genuinely missing, ask the user. "
+                        "Only pass save_as_draft=true if the user explicitly requested a draft."
+                    )
+
+                valid_values, grounding_message = validate_employee_values(employee_info)
+                if not valid_values:
+                    return False, grounding_message
+
+                invalid_fields = set(employee_info.keys()) - employee_fields
+
+                if invalid_fields:
+                    return False, (
+                        f"Unsupported employee fields: "
+                        f"{', '.join(sorted(invalid_fields))}"
+                    )
+
+            if declaration is not None and declaration not in declaration_options:
+                return False, "declaration must be either 'Yes' or 'No'."
+
+            return True, "Valid employee/declaration arguments."
+
+        # Expense creation operation
+        expense_required = [
+            "filename",
+            "expense_id",
+            "expense_date",
+            "category",
+            "description",
+            "amount",
+        ]
+
+        missing = [
+            field for field in expense_required
+            if arguments.get(field) is None
+            or (
+                isinstance(arguments.get(field), str)
+                and not arguments[field].strip()
+            )
+        ]
+
+        if missing:
+            return False, (
+                f"Expense creation requires: {', '.join(missing)}"
+            )
+
+        if arguments["category"] not in expense_categories:
+            return False, (
+                f"Invalid category. Allowed categories: "
+                f"{', '.join(sorted(expense_categories))}"
+            )
+
+        if not is_number(arguments["amount"]):
+            return False, "amount must be a finite, non-negative number."
+        if not value_was_supplied(arguments["amount"]):
+            return False, "The expense amount is not present in the user's messages. Ask the user to confirm it."
+
+        if not value_was_supplied(arguments["expense_id"]):
+            return False, (
+                "The Expense ID was not provided by the user or returned by a "
+                "verified tool. Ask the user for the exact Expense ID; never invent one."
+            )
+
+    # UPDATE EXCEL
+    elif tool.name == "update_excel":
+        updates = arguments.get("updates")
+        employee_updates = arguments.get("employee_updates")
+        declaration = arguments.get("declaration")
+
+        if updates is None and employee_updates is None and declaration is None:
+            return False, (
+                "Provide at least one of updates, employee_updates, "
+                "or declaration."
+            )
+
+        if updates is not None:
+            if not non_empty_dict(updates):
+                return False, "updates must be a non-empty object."
+
+            expense_id = arguments.get("expense_id")
+            if not isinstance(expense_id, str) or not expense_id.strip():
+                return False, "expense_id is required when updating an expense."
+            if not value_was_supplied(expense_id):
+                return False, (
+                    "The Expense ID was not provided by the user or returned by a "
+                    "verified tool. Ask the user for the exact Expense ID; never invent one."
+                )
+
+            allowed_updates = {
+                "date",
+                "category",
+                "description",
+                "amount",
+                "receipt_reference",
+            }
+
+            invalid_fields = set(updates.keys()) - allowed_updates
+
+            if invalid_fields:
+                return False, (
+                    f"Unsupported expense update fields: "
+                    f"{', '.join(sorted(invalid_fields))}"
+                )
+
+            if "amount" in updates and not is_number(updates["amount"]):
+                return False, "Updated amount must be a finite, non-negative number."
+            if "amount" in updates and not value_was_supplied(updates["amount"]):
+                return False, "The updated amount is not present in the user's messages. Ask the user to confirm it."
+
+            if (
+                "category" in updates
+                and updates["category"] not in expense_categories
+            ):
+                return False, "Invalid expense category."
+
+        if employee_updates is not None:
+            if not non_empty_dict(employee_updates):
+                return False, "employee_updates must be a non-empty object."
+
+            valid_values, grounding_message = validate_employee_values(employee_updates)
+            if not valid_values:
+                return False, grounding_message
+
+            invalid_fields = set(employee_updates.keys()) - employee_fields
+
+            if invalid_fields:
+                return False, (
+                    f"Unsupported employee update fields: "
+                    f"{', '.join(sorted(invalid_fields))}"
+                )
+
+        if declaration is not None and declaration not in declaration_options:
+            return False, "declaration must be either 'Yes' or 'No'."
+
+    # CALCULATE EXPENSE
+    elif tool.name == "calculate_expense":
+        calculation_type = arguments.get("calculation_type")
+
+        allowed_types = {
+            "mileage",
+            "per_diem",
+            "currency_conversion",
+            "quick_calculation",
+        }
+
+        if calculation_type not in allowed_types:
+            return False, (
+                f"Invalid calculation_type. Allowed values: "
+                f"{', '.join(sorted(allowed_types))}"
+            )
+
+        required_by_type = {
+            "mileage": ["distance_km", "rate_per_km"],
+            "per_diem": ["travel_days", "daily_allowance"],
+            "currency_conversion": [
+                "foreign_amount",
+                "exchange_rate",
+                "currency_code",
+            ],
+            "quick_calculation": ["number1", "number2", "operation"],
+        }
+
+        missing = [
+            field for field in required_by_type[calculation_type]
+            if arguments.get(field) is None
+            or (
+                isinstance(arguments.get(field), str)
+                and not arguments[field].strip()
+            )
+        ]
+
+        if missing:
+            return False, (
+                f"{calculation_type} requires: {', '.join(missing)}"
+            )
+
+        numeric_fields = {
+            "mileage": ["distance_km", "rate_per_km"],
+            "per_diem": ["travel_days", "daily_allowance"],
+            "currency_conversion": ["foreign_amount", "exchange_rate"],
+            "quick_calculation": ["number1", "number2"],
+        }
+
+        for field in numeric_fields[calculation_type]:
+            if not is_number(arguments[field]):
+                return False, f"{field} must be a finite, non-negative number."
+            if not value_was_supplied(arguments[field]):
+                return False, f"{field} was not supplied by the user or a verified tool. Ask the user instead of guessing."
+
+        if calculation_type == "per_diem":
+            days = arguments["travel_days"]
+            if days <= 0 or int(days) != days:
+                return False, "travel_days must be a positive whole number."
+
+        if calculation_type == "currency_conversion":
+            if not isinstance(arguments["currency_code"], str) or not arguments["currency_code"].strip():
+                return False, "currency_code must be provided."
+            if not value_was_supplied(arguments["currency_code"]):
+                return False, "currency_code was not supplied by the user. Ask the user instead of guessing."
+            if arguments["exchange_rate"] <= 0:
+                return False, "exchange_rate must be greater than zero."
+
+        if calculation_type == "quick_calculation":
+            operation = arguments["operation"]
+
+            if operation not in {"+", "-", "*", "/"}:
+                return False, "operation must be one of +, -, *, /."
+
+            if operation == "/" and arguments["number2"] == 0:
+                return False, "Division by zero is not allowed."
+
+    return True, "Arguments are valid."
+
 async def main():
+
+    if not all([LLM_BASE_URL, LLM_API_KEY, LLM_MODEL]):
+        raise ValueError(
+            "Missing required environment variables: set LLM_BASE_URL, "
+            "LLM_API_KEY, and LLM_MODEL in the .env file."
+        )
 
     print("Connecting to MCP server...")
 
@@ -89,7 +532,6 @@ async def main():
 
         # 1. Discover available MCP tools
         tools_response = await mcp_client.list_tools()
-
 
         # 2. Convert MCP tools into LiteLLM-compatible tools
         llm_tools = convert_mcp_tools_to_llm_tools(
@@ -101,6 +543,12 @@ async def main():
         for tool in llm_tools:
             print("-", tool["function"]["name"])
 
+        # Keep the actual MCP tool definitions for validation.
+        available_tools = {
+            tool.name: tool
+            for tool in tools_response.tools
+        }
+
         # 3. Get the user's natural-language request
         user_prompt = input("\nWhat would you like to do? ")
 
@@ -108,189 +556,145 @@ async def main():
             {
                 "role": "system",
                 "content": (
-                    "You are an intelligent travel reimbursement assistant. "
-                    "Understand the user's actual intent and select the most appropriate "
-                    "available MCP tool to perform the requested operation.\n\n"
+                    "You are an intelligent travel reimbursement assistant connected to an MCP server. "
+                    "Understand the user's intent, select the correct MCP tool, provide accurate arguments, "
+                    "and report only results confirmed by the tools.\n\n"
 
                     "TOOL SELECTION RULES:\n"
-                    "1. If the user asks to create, generate, or make a new workbook, "
-                    "call create_excel.\n"
-                    "2. If the user asks to read, retrieve, inspect, summarize, explain, "
-                    "or provide information from an existing workbook, call read_excel.\n"
-                    "3. If the user asks to list, show, or find available Excel workbooks, "
-                    "call list_excel_files.\n"
-                    "4. If the user asks to add, insert, record, or append a NEW expense, "
-                    "call write_excel.\n"
-                    "5. If the user asks to modify, correct, or change an EXISTING expense, "
-                    "call update_excel.\n"
-                    "6. If the user asks to add or record employee or travel information "
-                    "in an existing workbook, call write_excel with the employee_info argument.\n"
-                    "7. If the user asks to modify existing employee or travel information, "
-                    "call update_excel with the employee_updates argument.\n"
-                    "8. If the user asks to record or change their reimbursement declaration, "
-                    "use write_excel or update_excel with the declaration argument, "
-                    "depending on whether they are recording it for the first time "
-                    "or changing an existing value.\n"
-                    "9. If the user asks to calculate mileage, per diem, currency conversion, "
-                    "or perform a quick arithmetic calculation, call calculate_expense.\n"
-                    "10. If the user explicitly asks to submit, finalize, or send a claim "
-                    "to HR, call submit_to_hr.\n"
+                    "1. Create a new workbook -> create_excel.\n"
+                    "2. Read, inspect, retrieve, or summarize an existing workbook -> read_excel.\n"
+                    "3. List available workbooks -> list_excel_files.\n"
+                    "4. Add a NEW expense -> write_excel.\n"
+                    "5. Modify an EXISTING expense -> update_excel.\n"
+                    "6. Add employee or travel information -> write_excel with employee_info.\n"
+                    "7. Modify employee or travel information -> update_excel with employee_updates.\n"
+                    "8. Record or change a declaration -> write_excel or update_excel, respectively.\n"
+                    "9. Calculate mileage, per diem, currency conversion, or arithmetic -> calculate_expense.\n"
+                    "10. Submit a claim to HR -> submit_to_hr.\n"
                     "11. Never use write_excel to modify an existing expense.\n"
                     "12. Never use update_excel to create a new expense.\n"
-                    "13. Reading an existing workbook must NEVER trigger create_excel.\n"
-                    "14. Creating a new workbook must NEVER trigger read_excel unless "
-                    "the user explicitly requests both operations.\n"
-                    "15. Do not interpret a workbook filename alone as a request "
-                    "to create a workbook.\n"
-                    "16. If the user asks to read a workbook without specifying a "
-                    "worksheet, retrieve all available worksheets.\n"
-                    "17. If the user specifies a worksheet, focus on that worksheet.\n"
-                    "18. If the filename or another essential argument is missing, "
-                    "ask the user rather than guessing.\n\n"
+                    "13. Never create a workbook when the user specifies an existing workbook.\n"
+                    "14. Never interpret a filename alone as a request to create a workbook.\n"
+                    "15. If the user asks to read a workbook without specifying a worksheet, retrieve all worksheets.\n"
+                    "16. If the user names a worksheet, always pass that exact sheet_name.\n"
+                    "17. Do not request formula expressions unless the user explicitly asks to inspect formulas.\n\n"
+
+                    "WORKBOOK SELECTION RULES:\n"
+                    "1. If the user provides a filename, use that exact filename.\n"
+                    "2. Do NOT call list_excel_files when the user has already provided a filename.\n"
+                    "3. If the user needs to work with an existing workbook but gives no filename, "
+                    "call list_excel_files first.\n"
+                    "4. If only one relevant workbook is available, use it.\n"
+                    "5. If multiple workbooks are available and the intended one is unclear, ask the user.\n"
+                    "6. Do not ask the user to repeat information that is already available in the workbook.\n"
+                    "7. Do not call read_excel before a calculation if the filename and all calculation "
+                    "inputs are already provided.\n"
+                    "8. For updates, inspect the workbook when necessary to identify the target record.\n"
+                    "9. If the user requests a new workbook but gives no filename, ask for one.\n\n"
 
                     "EXPENSE CREATION RULES:\n"
-                    "1. A new expense requires filename, expense_id, expense_date, "
-                    "category, description, and amount.\n"
-                    "2. Receipt reference is optional.\n"
-                    "3. Use a unique Expense ID for every expense.\n"
-                    "4. Use only the configured expense categories: Transport, Food, "
-                    "Accommodation, Local Conveyance, and Miscellaneous.\n"
-                    "5. Expense dates must use YYYY-MM-DD format.\n"
-                    "6. Never invent expense information or IDs.\n"
-                    "7. Do not overwrite existing expense records.\n"
-                    "8. The write_excel tool adds EXACTLY ONE expense per call.\n"
-                    "9. Never pass multiple expenses inside the expense_id argument.\n"
-                    "10. Never pass a dictionary or nested object of expense records "
-                    "as the expense_id argument.\n"
-                    "11. Always pass expense_id as a single string.\n"
-                    "12. For each expense write_excel call, pass these separate arguments: "
-                    "filename, expense_id, expense_date, category, description, "
-                    "amount, and receipt_reference.\n"
-                    "13. If the user requests multiple new expenses, call write_excel "
-                    "separately for each expense, using one individual tool call "
-                    "per expense.\n"
-                    "14. Never combine multiple expense records into one tool call.\n"
-                    "15. Wait for each tool result before reporting that expense "
-                    "as successfully added.\n"
-                    "16. If any expense insertion fails, report its error and do not "
-                    "claim that it was added.\n"
-                    "17. Do not create a new workbook when the user has specified "
-                    "an existing workbook for expense insertion.\n\n"
+                    "1. Use write_excel to add exactly ONE new expense per call.\n"
+                    "2. Required arguments are filename, expense_id, expense_date, category, description, and amount.\n"
+                    "3. receipt_reference is optional.\n"
+                    "4. Pass expense_id as a single string, never as a dictionary or multiple IDs.\n"
+                    "5. Supported categories are Transport, Food, Accommodation, Local Conveyance, and Miscellaneous.\n"
+                    "6. Expense dates must use YYYY-MM-DD format.\n"
+                    "7. Never invent an expense ID, date, description, category, or amount.\n"
+                    "8. If a required value is missing, ask the user for it. Do not call write_excel until "
+                    "all required values are available.\n"
+                    "9. Do not assume the current date is the expense date.\n"
+                    "10. Do not use generic descriptions such as 'Travel expense' unless the user explicitly "
+                    "provides or confirms that description.\n"
+                    "11. If multiple expenses are requested, make one separate write_excel call per expense.\n"
+                    "12. Wait for each tool result before reporting success.\n\n"
 
                     "EMPLOYEE AND TRAVEL INFORMATION RULES:\n"
-                    "1. Employee and travel information must be recorded in the existing "
-                    "workbook using write_excel with the employee_info argument.\n"
-                    "2. Supported employee_info fields are: employee_name, employee_id, "
-                    "department, designation, email, travel_purpose, source_location, "
-                    "destination_location, travel_start_date, travel_end_date, and travel_days.\n"
-                    "3. Use the exact field names supported by the tool. Do not replace "
-                    "them with display labels such as 'Employee Name'.\n"
-                    "4. Do not invent employee details, travel dates, locations, or other values.\n"
-                    "5. Ask the user for any essential employee or travel information "
-                    "that is missing.\n"
-                    "6. Employee and travel dates must use YYYY-MM-DD format.\n"
-                    "7. travel_days must be a positive whole number.\n"
-                    "8. Employee information and expense creation are separate operations "
-                    "in write_excel. If the user requests both, make separate tool calls: "
-                    "one for employee_info and one for each expense.\n"
-                    "9. Do not pass expense fields when making an employee-information-only call.\n"
-                    "10. To modify existing employee or travel information, use update_excel "
-                    "with employee_updates containing only the fields the user explicitly "
-                    "wants to change.\n"
-                    "11. Use only supported employee field names in employee_updates.\n"
-                    "12. Employee updates and expense updates are separate operations. "
-                    "If both are requested, make separate update_excel calls.\n"
-                    "13. The declaration argument accepts only the configured values "
-                    "'Yes' or 'No'. Never assume the employee has accepted the declaration.\n"
-                    "14. If the user requests employee information and a declaration together, "
-                    "you may pass both employee_info and declaration in the same write_excel call.\n"
-                    "15. If the user requests an employee update and a declaration change together, "
-                    "you may pass both employee_updates and declaration in the same update_excel call.\n\n"
+                    "1. Use write_excel with employee_info to add employee or travel information.\n"
+                    "2. Supported editable fields are employee_name, employee_id, department, designation, email, "
+                    "travel_purpose, source_location, destination_location, travel_start_date, and travel_end_date.\n"
+                    "3. Use the exact supported field names.\n"
+                    "4. Never invent employee details, dates, locations, or other values.\n"
+                    "5. Ask for missing essential information.\n"
+                    "6. Dates must use YYYY-MM-DD format.\n"
+                    "7. travel_days is calculated automatically from travel_start_date and travel_end_date; never write it.\n"
+                    "8. Employee information and expense creation are separate operations. "
+                    "Use separate calls when both are requested.\n"
+                    "9. Use update_excel with employee_updates to modify existing employee information.\n"
+                    "10. Use only supported employee field names in employee_updates.\n"
+                    "11. The declaration argument accepts only 'Yes' or 'No'. Never assume the user's declaration.\n"
+                    "12. Employee information and declaration may be recorded together when requested.\n"
+                    "13. A normal employee/travel record must include every required field: employee_name, employee_id, department, designation, email, travel_purpose, source_location, destination_location, travel_start_date, and travel_end_date.\n"
+                    "14. If any required field is missing, ask for it and do not save a partial record.\n"
+                    "15. Partial saving is allowed only when the user explicitly asks to save a draft; then pass save_as_draft=true.\n"
+                    "16. Never claim fields were saved unless they appear in the tool result's updated_fields.\n\n"
 
                     "EXPENSE UPDATE RULES:\n"
-                    "1. An existing expense must be identified using its Expense ID.\n"
-                    "2. The updates argument must contain only the fields the user "
-                    "explicitly wants to change.\n"
-                    "3. Supported fields are date, category, description, amount, "
-                    "and receipt_reference.\n"
-                    "4. Never modify Expense ID or the calculated Date Check field.\n"
-                    "5. Never overwrite unrelated expense information.\n"
-                    "6. If the Expense ID is missing, ask the user for it.\n"
-                    "7. If the user requests an update but the target expense "
-                    "cannot be identified, do not guess which record to modify.\n"
-                    "8. Use one update_excel call for the specified existing expense "
-                    "and include all requested changes in its updates dictionary.\n\n"
+                    "1. Use update_excel only for an existing expense.\n"
+                    "2. Identify the expense using its Expense ID.\n"
+                    "3. If the Expense ID is not provided, inspect the workbook to identify the intended expense.\n"
+                    "4. If the intended expense remains unclear, ask the user.\n"
+                    "5. The updates argument may contain only these supported fields: date, category, "
+                    "description, amount, and receipt_reference.\n"
+                    "6. Change only the fields explicitly requested by the user.\n"
+                    "7. Never modify Expense ID or the calculated Date Check field.\n"
+                    "8. Do not overwrite unrelated information.\n"
+                    "9. Include all requested changes for the same expense in one update_excel call.\n\n"
 
-                    "EXPENSE CALCULATION RULES:\n"
-                    "1. Use calculate_expense for supported reimbursement calculations "
-                    "instead of performing those calculations yourself.\n"
-                    "2. The calculation_type must be one of: mileage, per_diem, "
-                    "currency_conversion, or quick_calculation.\n"
-                    "3. For mileage calculations, provide filename, distance_km, "
-                    "and rate_per_km.\n"
-                    "4. For per diem calculations, provide filename, travel_days, "
-                    "and daily_allowance.\n"
-                    "5. For currency conversion, provide filename, foreign_amount, "
-                    "exchange_rate, and currency_code.\n"
-                    "6. For quick calculations, provide filename, operand_1, "
-                    "operand_2, and operation.\n"
-                    "7. Supported quick-calculation operations are +, -, *, and /.\n"
-                    "8. Never invent a mileage rate, daily allowance, exchange rate, "
-                    "currency code, or calculation operand.\n"
-                    "9. If a required input is missing, ask the user for it before "
-                    "calling calculate_expense.\n"
-                    "10. Never perform division by zero.\n"
-                    "11. Do not claim a calculation was saved to a workbook unless "
-                    "calculate_expense confirms successful execution.\n"
-                    "12. Clearly report the calculation result and any error returned by the tool.\n\n"
+                    "CALCULATION RULES:\n"
+                    "1. Use calculate_expense for supported reimbursement calculations.\n"
+                    "2. calculation_type must be EXACTLY one of: mileage, per_diem, "
+                    "currency_conversion, quick_calculation.\n"
+                    "3. Never use shortened or alternative values such as 'conversion' or 'per diem' "
+                    "as the calculation_type. Use the exact values above.\n"
+                    "4. Mileage requires filename, distance_km, and rate_per_km.\n"
+                    "5. Per diem requires filename, travel_days, and daily_allowance.\n"
+                    "6. Currency conversion requires filename, foreign_amount, exchange_rate, and currency_code.\n"
+                    "7. Quick calculation requires filename, number1, number2, and operation.\n"
+                    "8. Supported quick-calculation operations are +, -, *, and /.\n"
+                    "9. Map the user's wording directly to the correct arguments.\n"
+                    "10. Example: 'Calculate per diem for 3 days at 1500 per day in Test_Claim.xlsx' "
+                    "means calculation_type='per_diem', travel_days=3, daily_allowance=1500, "
+                    "filename='Test_Claim.xlsx'.\n"
+                    "11. Example: 'Convert 100 USD using an exchange rate of 83 in Test_Claim.xlsx' "
+                    "means calculation_type='currency_conversion', foreign_amount=100, "
+                    "exchange_rate=83, currency_code='USD', filename='Test_Claim.xlsx'.\n"
+                    "12. Never omit a value that the user has explicitly provided.\n"
+                    "13. Never invent a mileage rate, daily allowance, exchange rate, currency code, "
+                    "or calculation operand.\n"
+                    "14. If a required input is genuinely missing, ask the user before calling the tool.\n"
+                    "15. Never divide by zero.\n"
+                    "16. Do not claim a calculation was saved unless the tool confirms success.\n\n"
 
                     "CLAIM SUBMISSION RULES:\n"
-                    "1. If the user explicitly asks to submit, finalize, "
-                    "or send a reimbursement claim to HR, call submit_to_hr.\n"
-                    "2. The submit_to_hr tool requires the existing workbook filename.\n"
+                    "1. Call submit_to_hr only when the user explicitly asks to submit or send the claim to HR.\n"
+                    "2. Use the existing workbook filename.\n"
                     "3. Never create a new workbook just to submit a claim.\n"
-                    "4. Never submit a claim automatically after adding or updating "
-                    "an expense.\n"
-                    "5. The tool validates required employee and travel information, "
-                    "at least one expense record, and employee declaration.\n"
-                    "6. If required information is missing, explain exactly which "
-                    "fields need to be completed. Do not invent values.\n"
-                    "7. The employee declaration must be accepted before submission.\n"
-                    "8. A successful submission returns the submission status, "
-                    "submission date, and claim reference.\n"
-                    "9. If the claim is already submitted, report its existing "
-                    "status and reference. Do not create a duplicate submission.\n"
-                    "10. Never claim that a claim was submitted unless the "
-                    "submit_to_hr tool confirms success.\n\n"
+                    "4. Never submit automatically after adding or updating an expense.\n"
+                    "5. If submission fails because information is missing, explain which fields need completion.\n"
+                    "6. Never invent missing information or claim submission success without tool confirmation.\n"
+                    "7. If the claim is already submitted, report its existing status and reference.\n\n"
 
-                    "EXECUTION RULES:\n"
-                    "1. Use available MCP tools to perform requested operations.\n"
-                    "2. Pass the correct arguments required by the selected tool.\n"
-                    "3. Do not call unrelated tools or perform additional operations "
-                    "that the user did not request.\n"
-                    "4. Ask for missing information only when essential.\n"
-                    "5. After receiving a tool result, inspect its contents and "
-                    "provide the actual result clearly.\n"
-                    "6. If a tool returns status 'error', explain the error. "
-                    "Do not claim that the operation succeeded.\n"
-                    "7. For workbook-reading requests, use retrieved workbook data. "
-                    "Never invent missing values.\n"
-                    "8. Distinguish between blank cells, formula strings, and actual "
-                    "calculated values.\n"
-                    "9. Do not interpret blank template fields as confirmed information.\n"
-                    "10. Avoid unnecessary explanations of Excel formulas when "
-                    "the user asks for actual workbook information.\n"
-                    "11. Never claim an operation succeeded unless the MCP tool "
-                    "confirms successful execution.\n"
-                    "12. Never output raw tool-call markup as a substitute for "
-                    "executing an MCP tool.\n"
-                    "13. If a tool call cannot be executed, clearly report the issue "
-                    "instead of pretending it succeeded.\n"
-                    "14. Do not fabricate tool results or execution confirmations.\n"
-                    "15. When a request requires multiple tool calls, execute them "
-                    "in the correct order and check each result before proceeding.\n"
-                    "16. If one operation fails, do not report later dependent operations "
-                    "as successful.\n"
+                    "MCP EXECUTION RULES:\n"
+                    "1. Use the available MCP tools to perform the requested operations.\n"
+                    "2. Select the tool that directly matches the user's intent.\n"
+                    "3. Pass the exact argument names and values required by that tool.\n"
+                    "4. Do not send unexpected or unnecessary arguments.\n"
+                    "5. Do not call unrelated tools or perform operations the user did not request.\n"
+                    "6. Before calling a tool, check that all required arguments are available.\n"
+                    "7. If an essential argument is missing, ask the user instead of guessing.\n"
+                    "8. After a tool call, inspect its actual result.\n"
+                    "9. If the tool returns status='error', report the error. Do not claim success.\n"
+                    "10. Use actual workbook data when answering workbook-related questions.\n"
+                    "11. Never fabricate workbook contents, calculation results, tool outputs, or confirmations.\n"
+                    "12. Distinguish blank cells from actual values and calculated results.\n"
+                    "13. When read_excel returns a formula expression or formula_note, do not invent its calculated value; explain that the workbook formula may need Excel recalculation.\n"
+                    "14. Never claim an operation succeeded unless the MCP tool confirms it.\n"
+                    "15. Do not repeat an operation that has already succeeded.\n"
+                    "16. If a tool call fails, explain the actual issue instead of inventing an explanation.\n"
+                    "17. Use only facts stated by the user or returned by verified tools. Never invent IDs, names, dates, locations, rates, or amounts.\n"
+                    "18. When validation or execution identifies missing/invalid information, ask the user for that specific information and wait for the reply before retrying.\n"
+                    "19. For employee writes, report only fields listed in updated_fields and report record_status/missing_fields accurately.\n"
+                    "20. When a tool succeeds, provide the confirmed result and finish the task; do not ask unnecessary follow-up questions.\n"
                 ),
             },
             {
@@ -299,93 +703,156 @@ async def main():
             },
         ]
 
-        # 4. Ask the LLM to respond and select a tool
-        for _ in range(6):
+        # 4. Ask the LLM to respond and select a tool. The loop continues
+        # only when clarification is needed or the current task needs more
+        # tool steps. A completed task exits without an unnecessary prompt.
+        awaiting_user_reply = False
+        verified_employee_write = None
+        max_rounds = 12
 
-            response = await acompletion(
-                model=f"openai/{LLM_MODEL}",
-                api_base=LLM_BASE_URL,
-                api_key=LLM_API_KEY,
-                messages=messages,
-                tools=llm_tools,
-                tool_choice="auto",
-                max_tokens=2048,
-            )
-
-            assistant_message = response.choices[0].message
-            
-            #print("Assistant:", assistant_message.model_dump_json(indent=2))
-
-            # If the LLM doesn't request a tool, show its final answer.
-            if not assistant_message.tool_calls:
-
-                print("\nAssistant:")
-                print(assistant_message.content)
+        for _ in range(max_rounds):
+            try:
+                response = await acompletion(
+                    model=f"openai/{LLM_MODEL}",
+                    api_base=LLM_BASE_URL,
+                    api_key=LLM_API_KEY,
+                    messages=messages,
+                    tools=llm_tools,
+                    tool_choice="auto",
+                    temperature=0,
+                    max_tokens=2048,
+                )
+            except Exception as error:
+                print(f"\nLLM request failed: {error}")
+                print("No further action was taken. Check the model endpoint/key and retry.")
                 break
 
-            # Add the LLM's tool-call message to the conversation.
-            messages.append(
-                assistant_message.model_dump(exclude_none=True)
-            )
+            assistant_message = response.choices[0].message
 
-            # 5. Execute each requested MCP tool
-            for tool_call in assistant_message.tool_calls:
-
-                tool_name = tool_call.function.name
-                tool_arguments = json.loads(
-                    tool_call.function.arguments
+            if not assistant_message.tool_calls:
+                final_response = clean_assistant_response(
+                    assistant_message.content
                 )
+                verified_response = format_verified_employee_write(verified_employee_write)
+                if verified_response:
+                    final_response = verified_response
+                print("\nAssistant:")
+                print(final_response or "The model returned an empty response.")
+
+                # Ask for another user message only when the model is asking
+                # a clarification question or a previous tool call failed.
+                clarification_needed = (
+                    awaiting_user_reply
+                    or is_clarification_request(final_response)
+                )
+                if clarification_needed:
+                    user_reply = input("\nYou (provide the missing/corrected information, or press Enter to stop): ").strip()
+                    if not user_reply:
+                        break
+                    messages.append({"role": "user", "content": user_reply})
+                    awaiting_user_reply = False
+                    continue
+
+                break
+
+            messages.append(assistant_message.model_dump(exclude_none=True))
+
+            for tool_call in assistant_message.tool_calls:
+                tool_name = tool_call.function.name
+                try:
+                    tool_arguments = json.loads(tool_call.function.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    tool_arguments = None
+
+                # If the latest user request names exactly one known worksheet,
+                # preserve that explicit scope even if the model omits sheet_name.
+                if tool_name == "read_excel" and isinstance(tool_arguments, dict):
+                    latest_user_text = next(
+                        (str(message.get("content", "")) for message in reversed(messages)
+                         if message.get("role") == "user"),
+                        "",
+                    ).casefold()
+                    known_sheets = (
+                        "Employee & Travel Information",
+                        "Expense Details",
+                        "Expense Calculator",
+                        "Claim Summary & HR",
+                    )
+                    mentioned_sheets = [
+                        name for name in known_sheets if name.casefold() in latest_user_text
+                    ]
+                    if len(mentioned_sheets) == 1 and not tool_arguments.get("sheet_name"):
+                        tool_arguments["sheet_name"] = mentioned_sheets[0]
 
                 print(f"\nLLM selected tool: {tool_name}")
                 print("Arguments:", tool_arguments)
 
-                # Only execute tools discovered from this MCP server.
-                available_names = {
-                    tool.name for tool in tools_response.tools
-                }
-
-                if tool_name not in available_names:
+                if awaiting_user_reply:
                     tool_output = {
                         "status": "error",
-                        "message": "Requested tool is not available.",
+                        "message": (
+                            "A previous tool call failed. Ask the user for the "
+                            "missing or corrected information before making another tool call."
+                        ),
                     }
-
+                    tool_failed = True
+                elif tool_name not in available_tools:
+                    tool_output = {"status": "error", "message": "Requested tool is not available."}
+                    tool_failed = True
+                elif tool_arguments is None:
+                    tool_output = {"status": "error", "message": "Invalid JSON tool arguments."}
+                    tool_failed = True
                 else:
-                    try:
-                        result = await mcp_client.call_tool(
-                            tool_name,
-                            tool_arguments
-                        )
+                    conversation_evidence = "\n".join(
+                        str(message.get("content", ""))
+                        for message in messages
+                        if message.get("role") in {"user", "tool"}
+                    )
+                    is_valid, validation_message = validate_tool_arguments(
+                        available_tools[tool_name],
+                        tool_arguments,
+                        conversation_evidence,
+                    )
 
-                        tool_output = {
-                            "is_error": result.is_error,
-                            "result": get_tool_result_text(result),
-                        }
+                    if not is_valid:
+                        tool_output = {"status": "error", "message": validation_message}
+                        tool_failed = True
+                    else:
+                        try:
+                            result = await mcp_client.call_tool(tool_name, tool_arguments)
+                            result_data = get_tool_result_text(result)
+                            tool_failed = bool(getattr(result, "is_error", False))
+                            if isinstance(result_data, dict) and result_data.get("status") == "error":
+                                tool_failed = True
+                            if (
+                                tool_name == "write_excel"
+                                and isinstance(tool_arguments, dict)
+                                and tool_arguments.get("employee_info") is not None
+                                and isinstance(result_data, dict)
+                                and result_data.get("status") == "success"
+                            ):
+                                verified_employee_write = result_data
+                            tool_output = {
+                                "is_error": tool_failed,
+                                "result": result_data,
+                            }
+                        except Exception as error:
+                            tool_output = {"status": "error", "message": str(error)}
+                            tool_failed = True
 
-                        #print("\nMCP Tool Result:")
-                        #print(json.dumps(tool_output, indent=2))
+                if tool_failed:
+                    awaiting_user_reply = True
 
-                    except Exception as error:
-                        tool_output = {
-                            "status": "error",
-                            "message": str(error),
-                        }
-
-                # 6. Return the MCP result to the LLM
+                print("Tool result:", json.dumps(tool_output, ensure_ascii=False, default=str))
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": json.dumps(
-                        tool_output,
-                        ensure_ascii=False,
-                        separators=(",", ":")
-                    ),
+                    "content": json.dumps(tool_output, ensure_ascii=False, separators=(",", ":"), default=str),
                 })
-
         else:
-            print("\nMaximum tool-call rounds reached.")
+            print("\nMaximum interaction rounds reached. The task may be incomplete; review the last tool result before retrying.")
+
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

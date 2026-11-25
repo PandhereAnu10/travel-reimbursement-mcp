@@ -15,7 +15,9 @@ mcp = MCPServer("travel-reimbursement")
 
 
 # Health-check tool
-@mcp.tool()
+@mcp.tool(
+    description="Check whether the travel reimbursement MCP server is responding."
+)
 def ping() -> str:
     # checking server is running
     return "pong"
@@ -38,16 +40,19 @@ def create_excel_tool(filename: str) -> dict:
 @mcp.tool(
     name="read_excel",
     description=(
-        "Read data from an existing travel reimbursement "
-        "Excel workbook. Optionally read a specific worksheet."
+        "Read data from an existing travel reimbursement Excel workbook. "
+        "If the user names a worksheet, ALWAYS pass its exact name as sheet_name; "
+        "otherwise all worksheets are returned. Formula expressions are omitted by default "
+        "to keep results concise; set include_formulas=true only when the user asks to inspect formulas."
     ),
 )
 def read_excel_tool(
     filename: str,
     sheet_name: str = None,
+    include_formulas: bool = False,
 ) -> dict:
     """Read workbook data using the Excel reading module."""
-    return read_excel_workbook(filename, sheet_name)
+    return read_excel_workbook(filename, sheet_name, include_formulas)
 
 
 # Excel workbook listing tool
@@ -67,10 +72,17 @@ def list_excel_files_tool() -> dict:
 @mcp.tool(
     name="write_excel",
     description=(
-        "Add a new expense record to an existing reimbursement workbook. "
-        "Requires filename, unique expense ID, expense date, category, "
-        "description, and amount. Receipt reference is optional. "
-        "Does not overwrite existing expense records."
+        "Write to an existing reimbursement workbook. Use employee_info to add "
+        "employee/travel fields, or declaration to record Yes/No; these may be "
+        "combined. Otherwise add one NEW expense using filename, unique expense_id, "
+        "expense_date (YYYY-MM-DD), category, description, and amount; "
+        "receipt_reference is optional. Do not combine employee/declaration data "
+        "with expense creation. Does not overwrite existing expenses. "
+        "travel_days is calculated from the travel dates and cannot be set directly. "
+        "For a normal employee/travel record, provide ALL required fields: employee_name, "
+        "employee_id, department, designation, email, travel_purpose, source_location, "
+        "destination_location, travel_start_date, and travel_end_date. The tool rejects "
+        "incomplete records unless the user explicitly asks to save a draft and save_as_draft=true is passed."
     ),
 )
 def write_excel_tool(
@@ -83,6 +95,7 @@ def write_excel_tool(
     receipt_reference: str = "",
     employee_info: dict = None,
     declaration: str = None,
+    save_as_draft: bool = False,
 ) -> dict:
     return write_excel(
         filename=filename,
@@ -94,15 +107,18 @@ def write_excel_tool(
         receipt_reference=receipt_reference,
         employee_info=employee_info,
         declaration=declaration,
+        save_as_draft=save_as_draft,
     )
 
 # Excel workbook update tool
 @mcp.tool(
     name="update_excel",
     description=(
-        "Update selected fields of an existing expense record "
-        "using its unique Expense ID. Supported fields are date, "
-        "category, description, amount, and receipt_reference. "
+        "Update an existing reimbursement workbook. For an expense, provide "
+        "expense_id and updates containing only date, category, description, "
+        "amount, and/or receipt_reference. For employee/travel information, use "
+        "employee_updates; declaration can be updated separately or alongside "
+        "those fields. Never pass travel_days: it is calculated from travel dates. "
         "Only explicitly supplied fields are changed."
     ),
 )
@@ -141,9 +157,10 @@ def submit_to_hr_tool(filename: str) -> dict:
     description=(
         "Calculate travel expenses using mileage, per diem, "
         "currency conversion, or basic arithmetic operations. "
-        "Saves calculation inputs and results in the workbook's "
-        "Expense Calculator worksheet. Supports addition, "
-        "subtraction, multiplication, and division."
+        "Saves calculation inputs in the workbook's Expense Calculator worksheet "
+        "and returns the calculated result. Workbook result cells remain formulas "
+        "so Excel can recalculate them. Supports addition, subtraction, "
+        "multiplication, and division."
     ),
 )
 def calculate_expense_tool(

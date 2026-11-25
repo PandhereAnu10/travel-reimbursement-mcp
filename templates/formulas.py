@@ -109,14 +109,6 @@ def add_calculator_formulas(workbook):
         f'{MILEAGE_DISTANCE_CELL}*{MILEAGE_RATE_CELL})'
     )
 
-    # Automatically uses the employee's calculated travel days.
-    travel_days = EMPLOYEE_FIELDS["travel_days"]["cell"]
-
-    worksheet[PER_DIEM_DAYS_CELL] = (
-        f'=IF(\'{EMPLOYEE_SHEET}\'!{travel_days}="","",'
-        f'\'{EMPLOYEE_SHEET}\'!{travel_days})'
-    )
-
     # Per diem amount = number of days × daily allowance.
     worksheet[PER_DIEM_RESULT_CELL] = (
         f'=IF(OR({PER_DIEM_DAYS_CELL}="",'

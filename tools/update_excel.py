@@ -4,7 +4,6 @@ from openpyxl import load_workbook
 from tools.create_excel import OUTPUT_DIR, validate_filename
 from zipfile import BadZipFile
 from openpyxl.utils.exceptions import InvalidFileException
-from decimal import Decimal, InvalidOperation
 
 from templates.reimbursement import (
     EMPLOYEE_SHEET,
@@ -144,6 +143,12 @@ def update_excel(
                     "Employee updates must be a non-empty dictionary."
                 )
 
+            if "travel_days" in employee_updates:
+                raise ValueError(
+                    "Travel days are calculated automatically from the "
+                    "travel start and end dates; do not set travel_days directly."
+                )
+
             invalid_fields = (
                 set(employee_updates.keys()) - set(EMPLOYEE_FIELDS.keys())
             )
@@ -161,30 +166,6 @@ def update_excel(
 
                 if field in ("travel_start_date", "travel_end_date"):
                     value = validate_expense_date(value)
-
-                elif field == "travel_days":
-                    if isinstance(value, bool):
-                        raise ValueError(
-                            "Travel days must be a positive whole number."
-                        )
-
-                    try:
-                        days = Decimal(str(value))
-                    except (InvalidOperation, ValueError, TypeError):
-                        raise ValueError(
-                            "Travel days must be a positive whole number."
-                        )
-
-                    if (
-                        not days.is_finite()
-                        or days <= 0
-                        or days != days.to_integral_value()
-                    ):
-                        raise ValueError(
-                            "Travel days must be a positive whole number."
-                        )
-
-                    value = int(days)
 
                 else:
                     value = validate_text(

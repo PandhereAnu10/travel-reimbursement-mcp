@@ -1,5 +1,6 @@
 
 from decimal import Decimal, InvalidOperation
+import math
 from pathlib import Path
 from zipfile import BadZipFile
 
@@ -25,6 +26,12 @@ def validate_number(value, field_name):
 
     if number < 0:
         raise ValueError(f"{field_name} cannot be negative.")
+
+    try:
+        if not math.isfinite(float(number)):
+            raise ValueError(f"{field_name} is outside the supported numeric range.")
+    except (OverflowError, ValueError):
+        raise ValueError(f"{field_name} is outside the supported numeric range.")
 
     return number
 
@@ -84,7 +91,7 @@ def calculate_expense(
 
             sheet["B4"] = float(distance)
             sheet["B5"] = float(rate)
-            sheet["C6"] = float(result)
+            # C6 is a workbook formula; leave it intact.
 
             details = {
                 "distance_km": float(distance),
@@ -97,14 +104,14 @@ def calculate_expense(
                 daily_allowance, "Daily allowance"
             )
 
-            if days <= 0:
-                raise ValueError("Travel days must be greater than zero.")
+            if days <= 0 or days != days.to_integral_value():
+                raise ValueError("Travel days must be a positive whole number.")
 
             result = days * allowance
 
             sheet["B9"] = float(days)
             sheet["B10"] = float(allowance)
-            sheet["C11"] = float(result)
+            # C11 is a workbook formula; leave it intact.
 
             details = {
                 "travel_days": float(days),
@@ -128,9 +135,9 @@ def calculate_expense(
             result = amount * rate
 
             sheet["B14"] = float(amount)
-            sheet["B15"] = float(rate)
-            sheet["B16"] = currency_code
-            sheet["C17"] = float(result)
+            sheet["B15"] = currency_code
+            sheet["B16"] = float(rate)
+            # C17 is a workbook formula; leave it intact.
 
             details = {
                 "foreign_amount": float(amount),
@@ -161,13 +168,16 @@ def calculate_expense(
             sheet["B20"] = float(first)
             sheet["B21"] = operation
             sheet["B22"] = float(second)
-            sheet["C23"] = float(result)
+            # C23 is a workbook formula; leave it intact.
 
             details = {
                 "number1": float(first),
                 "number2": float(second),
                 "operation": operation,
             }
+
+        if not result.is_finite() or not math.isfinite(float(result)):
+            raise ValueError("Calculation result is outside the supported numeric range.")
 
         save_workbook_safely(workbook, file_path)
 

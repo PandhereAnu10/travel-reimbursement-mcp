@@ -113,3 +113,28 @@ def test_reject_invalid_filename(tmp_path, monkeypatch):
         assert False, "Expected ValueError"
     except ValueError:
         pass
+
+
+def test_read_keeps_formula_cells(output_dir):
+    file_path = create_test_workbook(output_dir)
+    workbook = __import__("openpyxl").load_workbook(file_path)
+    workbook["Employee"]["B4"] = "=1+1"
+    workbook.save(file_path)
+    workbook.close()
+
+    result = read_excel_module.read_excel("test.xlsx", sheet_name="Employee", include_formulas=True)
+
+    assert [None, "=1+1"] in result["sheets"]["Employee"]
+    assert "formula expressions" in result["formula_note"]
+
+
+def test_read_omits_formula_only_rows_by_default(output_dir):
+    file_path = create_test_workbook(output_dir)
+    workbook = __import__("openpyxl").load_workbook(file_path)
+    workbook["Employee"]["B4"] = "=1+1"
+    workbook.save(file_path)
+    workbook.close()
+
+    result = read_excel_module.read_excel("test.xlsx", sheet_name="Employee")
+    assert [None, "=1+1"] not in result["sheets"]["Employee"]
+    assert "formula_note" not in result

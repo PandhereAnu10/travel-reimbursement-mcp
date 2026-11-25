@@ -17,6 +17,7 @@ from templates.reimbursement import (
 from templates.formatting import format_workbook
 from templates.formulas import add_workbook_formulas
 from templates.validations import add_workbook_validations
+from tools.common_func import save_workbook_safely
 
 
 # Project's output directory
@@ -92,8 +93,8 @@ def create_excel(filename: str) -> dict:
         # Step 10: Add dropdowns and input validations.
         add_workbook_validations(workbook)
 
-        # Step 11: Save the completed workbook.
-        workbook.save(file_path)
+        # Step 11: Save the completed workbook atomically.
+        save_workbook_safely(workbook, file_path)
 
     finally:
         workbook.close()
