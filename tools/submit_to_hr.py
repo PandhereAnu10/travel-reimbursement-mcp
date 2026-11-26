@@ -7,13 +7,14 @@ from zipfile import BadZipFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
-from tools.create_excel import OUTPUT_DIR
+from tools.create_excel import OUTPUT_DIR, resolve_workbook_path
 
 from templates.reimbursement import (
     EMPLOYEE_SHEET,
     EMPLOYEE_FIELDS,
     REQUIRED_EMPLOYEE_FIELDS,
     EXPENSE_SHEET,
+    CALCULATOR_SHEET,
     EXPENSE_FIRST_ROW,
     EXPENSE_LAST_ROW,
     EXPENSE_COLUMNS,
@@ -24,6 +25,7 @@ from templates.reimbursement import (
     CLAIM_REFERENCE_ID_CELL,
     DECLARATION_CELL,
     SUBMITTED_STATUS,
+    DEFAULT_STATUS,
     DATE_FORMAT,
 )
 
@@ -32,6 +34,7 @@ from tools.common_func import (
     validate_expense_date,
     validate_expense_amount,
     validate_text,
+    validate_email,
     validate_expense_headers,
 )
 
@@ -43,6 +46,8 @@ def generate_claim_reference():
     highest_number = 0
 
     for file_path in OUTPUT_DIR.glob("*.xlsx"):
+        if file_path.is_symlink():
+            continue
         workbook = None
 
         try:
@@ -102,7 +107,7 @@ def submit_to_hr(filename: str) -> dict:
                 "message": "Provide a valid Excel filename ending in .xlsx.",
             }
 
-        file_path = (OUTPUT_DIR / filename).resolve()
+        file_path = resolve_workbook_path(filename, OUTPUT_DIR).resolve()
 
         if file_path.parent != OUTPUT_DIR.resolve():
             return {
@@ -122,6 +127,7 @@ def submit_to_hr(filename: str) -> dict:
         required_sheets = [
             EMPLOYEE_SHEET,
             EXPENSE_SHEET,
+            CALCULATOR_SHEET,
             SUMMARY_SHEET,
         ]
 
@@ -147,16 +153,25 @@ def submit_to_hr(filename: str) -> dict:
         ].value
 
         if existing_status == SUBMITTED_STATUS:
+            submission_date = summary_sheet[SUBMISSION_DATE_CELL].value
+            claim_reference = summary_sheet[CLAIM_REFERENCE_ID_CELL].value
+            if not submission_date or not claim_reference:
+                return {
+                    "status": "error",
+                    "message": "Submission status is marked as submitted but submission metadata is incomplete. Verify the workbook before retrying.",
+                }
             return {
                 "status": "already_submitted",
                 "message": "This claim has already been submitted to HR.",
                 "submission_status": existing_status,
-                "submission_date": summary_sheet[
-                    SUBMISSION_DATE_CELL
-                ].value,
-                "claim_reference": summary_sheet[
-                    CLAIM_REFERENCE_ID_CELL
-                ].value,
+                "submission_date": submission_date,
+                "claim_reference": claim_reference,
+            }
+
+        if existing_status != DEFAULT_STATUS:
+            return {
+                "status": "error",
+                "message": f"Claim status must be '{DEFAULT_STATUS}' before submission.",
             }
 
         # Validate employee information.
@@ -171,6 +186,10 @@ def submit_to_hr(filename: str) -> dict:
                 isinstance(value, str) and not value.strip()
             ):
                 missing_fields.append(label)
+            elif field == "email":
+                validate_email(value)
+            elif field not in {"travel_start_date", "travel_end_date"}:
+                validate_text(value, label)
 
         if missing_fields:
             return {

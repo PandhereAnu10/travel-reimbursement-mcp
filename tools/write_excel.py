@@ -1,5 +1,5 @@
 from openpyxl import load_workbook
-from tools.create_excel import OUTPUT_DIR, validate_filename
+from tools.create_excel import OUTPUT_DIR, validate_filename, resolve_workbook_path
 
 from zipfile import BadZipFile
 from openpyxl.utils.exceptions import InvalidFileException
@@ -26,6 +26,9 @@ from tools.common_func import (
     validate_expense_amount,
     validate_text,
     validate_expense_headers,
+    ensure_claim_editable,
+    validate_date_within_travel_period,
+    validate_email,
 )
 
 def write_excel(
@@ -47,7 +50,7 @@ def write_excel(
     try:
         # 1. Validate filename.
         filename = validate_filename(filename)
-        file_path = OUTPUT_DIR / filename
+        file_path = resolve_workbook_path(filename, OUTPUT_DIR)
 
         if not file_path.is_file():
             raise FileNotFoundError(
@@ -57,6 +60,8 @@ def write_excel(
         # 2. Open workbook.
         workbook = load_workbook(file_path)
         
+        ensure_claim_editable(workbook)
+
         # 3. Handle employee and travel information.
         if employee_info is not None or declaration is not None:
 
@@ -91,11 +96,16 @@ def write_excel(
                 if not isinstance(save_as_draft, bool):
                     raise ValueError("save_as_draft must be true or false.")
 
+                merged_employee_values = {
+                    field: employee_sheet[EMPLOYEE_FIELDS[field]["cell"]].value
+                    for field in REQUIRED_EMPLOYEE_FIELDS
+                }
+                merged_employee_values.update(employee_info)
                 missing_fields = [
                     field for field in REQUIRED_EMPLOYEE_FIELDS
-                    if field not in employee_info
-                    or employee_info[field] is None
-                    or (isinstance(employee_info[field], str) and not employee_info[field].strip())
+                    if merged_employee_values.get(field) is None
+                    or (isinstance(merged_employee_values.get(field), str)
+                        and not merged_employee_values[field].strip())
                 ]
                 if missing_fields and not save_as_draft:
                     raise ValueError(
@@ -115,6 +125,8 @@ def write_excel(
                     if field in ("travel_start_date", "travel_end_date"):
                         validated_info[field] = validate_expense_date(value)
 
+                    elif field == "email":
+                        validated_info[field] = validate_email(value)
                     else:
                         validated_info[field] = validate_text(
                             value, EMPLOYEE_FIELDS[field]["label"]
@@ -131,6 +143,18 @@ def write_excel(
                         raise ValueError(
                             "Travel end date cannot be earlier than travel start date."
                         )
+                    if EXPENSE_SHEET in workbook.sheetnames:
+                        existing_expenses = workbook[EXPENSE_SHEET]
+                        for expense_row in range(EXPENSE_FIRST_ROW, EXPENSE_LAST_ROW + 1):
+                            raw_expense_date = existing_expenses.cell(
+                                expense_row, EXPENSE_COLUMNS["date"]
+                            ).value
+                            if raw_expense_date not in (None, ""):
+                                parsed_expense_date = validate_expense_date(raw_expense_date)
+                                if not start_date <= parsed_expense_date <= end_date:
+                                    raise ValueError(
+                                        f"Travel-date update would place the expense in row {expense_row} outside the travel period."
+                                    )
 
                 for field, value in validated_info.items():
                     cell = EMPLOYEE_FIELDS[field]["cell"]
@@ -192,6 +216,9 @@ def write_excel(
             )
 
         parsed_date = validate_expense_date(expense_date)
+        validate_date_within_travel_period(
+            parsed_date, workbook, require_period=True
+        )
         parsed_amount = validate_expense_amount(amount)
 
         if receipt_reference is None:

@@ -59,35 +59,17 @@ def test_write_and_update_descriptions_explain_supported_modes(monkeypatch):
     assert "travel_days" in registered["write_excel"]["description"]
 
 
+def test_server_uses_authenticated_streamable_http_transport():
+    source = Path(__file__).resolve().parents[1].joinpath("server.py").read_text(encoding="utf-8")
 
-def test_server_uses_streamable_http_transport(monkeypatch):
-    module, _ = load_server_with_mcp_stub(monkeypatch)
-    source = Path(module.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    assert "MCP_AUTH_TOKEN" in source
+    assert 'mcp.streamable_http_app(streamable_http_path="/mcp")' in source
+    assert "BearerTokenMiddleware" in source
+    assert "uvicorn.run(app, host=host, port=port)" in source
 
-    main_guard = next(
-        node for node in tree.body
-        if isinstance(node, ast.If)
-        and isinstance(node.test, ast.Compare)
-        and isinstance(node.test.left, ast.Name)
-        and node.test.left.id == "__name__"
-    )
 
-    run_call = next(
-        node.value
-        for node in main_guard.body
-        if isinstance(node, ast.Expr)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Attribute)
-        and node.value.func.attr == "run"
-    )
-
-    assert run_call.func.attr == "run"
-
-    keywords = {
-        keyword.arg: keyword.value
-        for keyword in run_call.keywords
-    }
-
-    assert ast.literal_eval(keywords["transport"]) == "streamable-http"
-    assert ast.literal_eval(keywords["streamable_http_path"]) == "/mcp"
+def test_server_supports_stdio_and_http_transports():
+    source = Path(__file__).resolve().parents[1].joinpath("server.py").read_text(encoding="utf-8")
+    assert 'choices=("stdio", "streamable-http")' in source
+    assert 'mcp.run(transport="stdio")' in source
+    assert 'mcp.streamable_http_app(streamable_http_path="/mcp")' in source

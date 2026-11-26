@@ -333,3 +333,14 @@ def test_reject_negative_expense_amount(valid_claim):
     result = submit_module.submit_to_hr(valid_claim.name)
 
     assert result["status"] == "error"
+
+
+def test_submission_requires_calculator_worksheet(valid_claim):
+    workbook = load_workbook(valid_claim)
+    workbook.remove(workbook["Expense Calculator"])
+    workbook.save(valid_claim)
+    workbook.close()
+
+    result = submit_module.submit_to_hr(valid_claim.name)
+    assert result["status"] == "error"
+    assert "Expense Calculator" in result["missing_sheets"]

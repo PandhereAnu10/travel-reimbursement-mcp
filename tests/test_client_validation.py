@@ -173,3 +173,35 @@ def test_verified_employee_draft_summary_reports_missing_fields(client_module):
     assert "incomplete draft" in summary
     assert "Travel purpose" in summary
     assert "Travel start date" in summary
+
+
+def test_currency_conversion_accepts_equivalent_decimal_formatting(client_module):
+    tool = make_tool(
+        "calculate_expense",
+        {"filename", "calculation_type", "foreign_amount", "exchange_rate", "currency_code"},
+    )
+    valid, message = client_module.validate_tool_arguments(
+        tool,
+        {
+            "filename": "claim.xlsx",
+            "calculation_type": "currency_conversion",
+            "foreign_amount": 100,
+            "exchange_rate": 83.5,
+            "currency_code": "USD",
+        },
+        "Convert USD 100 into INR using an exchange rate of 83.50 INR per USD "
+        "and save the calculation in claim.xlsx.",
+    )
+    assert valid, message
+
+
+def test_clarification_detector_catches_update_confirmation_question(client_module):
+    assert client_module.is_clarification_request(
+        "Would you like me to update that existing record with the new details?"
+    )
+
+
+def test_clarification_detector_catches_yes_no_action_question(client_module):
+    assert client_module.is_clarification_request(
+        "Do you want me to replace the existing expense?"
+    )

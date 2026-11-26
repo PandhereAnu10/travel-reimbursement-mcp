@@ -7,8 +7,8 @@ from zipfile import BadZipFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
-from tools.create_excel import OUTPUT_DIR, validate_filename
-from tools.common_func import save_workbook_safely
+from tools.create_excel import OUTPUT_DIR, validate_filename, resolve_workbook_path
+from tools.common_func import save_workbook_safely, ensure_claim_editable
 from templates.reimbursement import CALCULATOR_SHEET
 
 
@@ -55,13 +55,15 @@ def calculate_expense(
 
     try:
         filename = validate_filename(filename)
-        file_path = OUTPUT_DIR / filename
+        file_path = resolve_workbook_path(filename, OUTPUT_DIR)
 
         if not file_path.is_file():
             raise FileNotFoundError(
                 f"Workbook '{filename}' was not found."
             )
 
+        if not isinstance(calculation_type, str):
+            raise ValueError("Calculation type must be text.")
         calculation_type = calculation_type.strip().lower()
 
         if calculation_type not in {
@@ -82,6 +84,7 @@ def calculate_expense(
                 f"Worksheet '{CALCULATOR_SHEET}' does not exist."
             )
 
+        ensure_claim_editable(workbook)
         sheet = workbook[CALCULATOR_SHEET]
 
         if calculation_type == "mileage":
@@ -131,6 +134,9 @@ def calculate_expense(
                 raise ValueError("Currency code is required.")
 
             currency_code = currency_code.strip().upper()
+            import re
+            if not re.fullmatch(r"[A-Z]{3}", currency_code):
+                raise ValueError("Currency code must be a three-letter ISO-style code, such as USD or INR.")
 
             result = amount * rate
 

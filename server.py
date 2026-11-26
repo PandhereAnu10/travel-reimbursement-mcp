@@ -1,9 +1,12 @@
 
 import os
+import argparse
 from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server import MCPServer
+
+from security import BearerTokenMiddleware
 
 from tools.create_excel import create_excel as create_excel_workbook
 from tools.read_excel import read_excel as read_excel_workbook
@@ -86,6 +89,7 @@ def list_excel_files_tool() -> dict:
         "expense_date (YYYY-MM-DD), category, description, and amount; "
         "receipt_reference is optional. Do not combine employee/declaration data "
         "with expense creation. Does not overwrite existing expenses. "
+        "A complete travel start and end date must already be recorded before an expense can be added. "
         "travel_days is calculated from the travel dates and cannot be set directly. "
         "For a normal employee/travel record, provide ALL required fields: employee_name, "
         "employee_id, department, designation, email, travel_purpose, source_location, "
@@ -124,7 +128,8 @@ def write_excel_tool(
     description=(
         "Update an existing reimbursement workbook. For an expense, provide "
         "expense_id and updates containing only date, category, description, "
-        "amount, and/or receipt_reference. For employee/travel information, use "
+        "amount, and/or receipt_reference. An explicit expense-date change requires "
+        "a complete travel start/end period in the workbook. For employee/travel information, use "
         "employee_updates; declaration can be updated separately or alongside "
         "those fields. Never pass travel_days: it is calculated from travel dates. "
         "Only explicitly supplied fields are changed."
@@ -202,12 +207,32 @@ def calculate_expense_tool(
 
 
 if __name__ == "__main__":
-    # Run as a standalone Streamable HTTP MCP server.
-    host = os.getenv("MCP_HOST", "127.0.0.1")
-    port = int(os.getenv("MCP_PORT", "8000"))
-    mcp.run(
-        transport="streamable-http",
-        host=host,
-        port=port,
-        streamable_http_path="/mcp",
+    parser = argparse.ArgumentParser(description="Travel reimbursement MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default=os.getenv("MCP_TRANSPORT", "streamable-http"),
+        help="MCP transport to expose (default: streamable-http)",
     )
+    args = parser.parse_args()
+
+    if args.transport == "stdio":
+        # Local stdio mode is intended for MCP clients that launch this process.
+        mcp.run(transport="stdio")
+    else:
+        # Require a configured secret so the HTTP endpoint never starts unprotected.
+        auth_token = os.getenv("MCP_AUTH_TOKEN")
+        if not auth_token or len(auth_token) < 32:
+            raise RuntimeError(
+                "MCP_AUTH_TOKEN is missing or too short. Generate one with "
+                "python -c \"import secrets; print(secrets.token_urlsafe(32))\" and add it to .env."
+            )
+
+        app = mcp.streamable_http_app(streamable_http_path="/mcp")
+        app = BearerTokenMiddleware(app, auth_token, protected_path="/mcp")
+
+        host = os.getenv("MCP_HOST", "127.0.0.1")
+        port = int(os.getenv("MCP_PORT", "8000"))
+
+        import uvicorn
+        uvicorn.run(app, host=host, port=port)

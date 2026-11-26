@@ -1,7 +1,7 @@
 
 from openpyxl import load_workbook
 
-from tools.create_excel import OUTPUT_DIR, validate_filename
+from tools.create_excel import OUTPUT_DIR, validate_filename, resolve_workbook_path
 from zipfile import BadZipFile
 from openpyxl.utils.exceptions import InvalidFileException
 
@@ -27,6 +27,9 @@ from tools.common_func import (
     validate_expense_date,
     validate_expense_amount,
     validate_text,
+    ensure_claim_editable,
+    validate_date_within_travel_period,
+    validate_email,
 )
 
 
@@ -53,7 +56,7 @@ def update_excel(
     try:
         # 1. Validate filename.
         filename = validate_filename(filename)
-        file_path = OUTPUT_DIR / filename
+        file_path = resolve_workbook_path(filename, OUTPUT_DIR)
 
         if not file_path.is_file():
             raise FileNotFoundError(
@@ -167,6 +170,8 @@ def update_excel(
                 if field in ("travel_start_date", "travel_end_date"):
                     value = validate_expense_date(value)
 
+                elif field == "email":
+                    value = validate_email(value)
                 else:
                     value = validate_text(
                         value, EMPLOYEE_FIELDS[field]["label"]
@@ -191,6 +196,7 @@ def update_excel(
 
         # 4. Open workbook.
         workbook = load_workbook(file_path)
+        ensure_claim_editable(workbook)
 
         # Handle employee and travel information updates.
         if employee_updates is not None:
@@ -221,6 +227,18 @@ def update_excel(
                     raise ValueError(
                         "Travel end date cannot be earlier than travel start date."
                     )
+                if EXPENSE_SHEET in workbook.sheetnames:
+                    expenses_ws = workbook[EXPENSE_SHEET]
+                    for expense_row in range(EXPENSE_FIRST_ROW, EXPENSE_LAST_ROW + 1):
+                        raw_expense_date = expenses_ws.cell(
+                            expense_row, EXPENSE_COLUMNS["date"]
+                        ).value
+                        if raw_expense_date not in (None, ""):
+                            parsed_expense_date = validate_expense_date(raw_expense_date)
+                            if not start_date <= parsed_expense_date <= end_date:
+                                raise ValueError(
+                                    f"Travel-date update would place the expense in row {expense_row} outside the travel period."
+                                )
 
             for field, value in validated_employee_updates.items():
                 cell = EMPLOYEE_FIELDS[field]["cell"]
@@ -295,6 +313,16 @@ def update_excel(
                 )
 
             target_row = matching_rows[0]
+            resulting_expense_date = validated_updates.get(
+                "date",
+                worksheet.cell(target_row, EXPENSE_COLUMNS["date"]).value,
+            )
+            if resulting_expense_date not in (None, ""):
+                validate_date_within_travel_period(
+                    validate_expense_date(resulting_expense_date),
+                    workbook,
+                    require_period=("date" in validated_updates),
+                )
 
             # 7. Check that target cells do not contain formulas.
             for field in validated_updates:

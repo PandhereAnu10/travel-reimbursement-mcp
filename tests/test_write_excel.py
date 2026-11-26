@@ -16,7 +16,17 @@ from templates.reimbursement import (
 )
 
 
+def set_test_travel_period(workbook_path):
+    workbook = load_workbook(workbook_path)
+    employee = workbook[EMPLOYEE_SHEET]
+    employee[EMPLOYEE_FIELDS["travel_start_date"]["cell"]] = "2026-11-20"
+    employee[EMPLOYEE_FIELDS["travel_end_date"]["cell"]] = "2026-11-30"
+    workbook.save(workbook_path)
+    workbook.close()
+
+
 def test_write_expense_record(reimbursement_file):
+    set_test_travel_period(reimbursement_file)
     result = write_excel_module.write_excel(
         filename="test.xlsx",
         expense_id="EXP001",
@@ -182,6 +192,7 @@ def test_reject_negative_expense_amount(reimbursement_file):
 
 
 def test_reject_duplicate_expense_id(reimbursement_file):
+    set_test_travel_period(reimbursement_file)
     first_result = write_excel_module.write_excel(
         filename="test.xlsx",
         expense_id="EXP004",
@@ -288,3 +299,77 @@ def test_reject_end_date_before_start_date(reimbursement_file):
 
     assert result["status"] == "error"
     assert "Travel end date" in result["message"]
+
+
+def test_reject_invalid_employee_email(reimbursement_file):
+    info = {
+        "employee_name": "Test User", "employee_id": "EMP001",
+        "department": "Engineering", "designation": "Engineer",
+        "email": "not-an-email", "travel_purpose": "Business Meeting",
+        "source_location": "Mumbai", "destination_location": "Bengaluru",
+        "travel_start_date": "2026-11-20", "travel_end_date": "2026-11-22",
+    }
+    result = write_excel_module.write_excel(filename="test.xlsx", employee_info=info)
+    assert result["status"] == "error"
+    assert "valid email" in result["message"]
+
+
+def test_expense_date_must_be_within_existing_travel_period(reimbursement_file):
+    info = {
+        "employee_name": "Test User", "employee_id": "EMP001",
+        "department": "Engineering", "designation": "Engineer",
+        "email": "test@example.com", "travel_purpose": "Business Meeting",
+        "source_location": "Mumbai", "destination_location": "Bengaluru",
+        "travel_start_date": "2026-11-20", "travel_end_date": "2026-11-22",
+    }
+    assert write_excel_module.write_excel(filename="test.xlsx", employee_info=info)["status"] == "success"
+    result = write_excel_module.write_excel(
+        filename="test.xlsx", expense_id="EXP-RANGE", expense_date="2026-11-25",
+        category="Transport", description="Taxi", amount=500,
+    )
+    assert result["status"] == "error"
+    assert "between the travel start date" in result["message"]
+
+    workbook = load_workbook(reimbursement_file)
+    worksheet = workbook[EXPENSE_SHEET]
+    assert all(
+        worksheet.cell(row, EXPENSE_COLUMNS["expense_id"]).value is None
+        for row in range(EXPENSE_FIRST_ROW, EXPENSE_FIRST_ROW + 3)
+    )
+    workbook.close()
+
+
+def test_partial_employee_write_merges_existing_values(reimbursement_file):
+    info = {
+        "employee_name": "Test User", "employee_id": "EMP001",
+        "department": "Engineering", "designation": "Engineer",
+        "email": "test@example.com", "travel_purpose": "Business Meeting",
+        "source_location": "Mumbai", "destination_location": "Bengaluru",
+        "travel_start_date": "2026-11-20", "travel_end_date": "2026-11-22",
+    }
+    assert write_excel_module.write_excel(filename="test.xlsx", employee_info=info)["status"] == "success"
+    result = write_excel_module.write_excel(
+        filename="test.xlsx", employee_info={"department": "Research"}
+    )
+    assert result["status"] == "success"
+    assert result["record_status"] == "Complete"
+
+
+def test_new_expense_is_rejected_when_travel_period_is_missing(reimbursement_file):
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        expense_id="EXP-NO-PERIOD",
+        expense_date="2026-11-25",
+        category="Food",
+        description="Lunch",
+        amount=250,
+    )
+    assert result["status"] == "error"
+    assert "Travel start and end dates must be recorded" in result["message"]
+
+    workbook = load_workbook(reimbursement_file)
+    worksheet = workbook[EXPENSE_SHEET]
+    assert worksheet.cell(
+        EXPENSE_FIRST_ROW, EXPENSE_COLUMNS["expense_id"]
+    ).value is None
+    workbook.close()

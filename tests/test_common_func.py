@@ -158,3 +158,49 @@ def test_reject_invalid_expense_headers():
         validate_expense_headers(worksheet)
 
     workbook.close()
+
+
+def test_save_workbook_safely_retries_transient_permission_error(tmp_path, monkeypatch):
+    import tools.common_func as common_func
+
+    file_path = tmp_path / "retry_save.xlsx"
+    workbook = Workbook()
+    workbook.active["A1"] = "Retry test"
+    original_replace = common_func.os.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(source, destination):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise PermissionError("temporary file lock")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(common_func.os, "replace", flaky_replace)
+    monkeypatch.setattr(common_func.time, "sleep", lambda _seconds: None)
+
+    save_workbook_safely(workbook, file_path)
+
+    assert attempts["count"] == 2
+    saved_workbook = load_workbook(file_path)
+    assert saved_workbook.active["A1"].value == "Retry test"
+    saved_workbook.close()
+    workbook.close()
+
+
+def test_save_workbook_safely_reports_persistent_windows_lock(tmp_path, monkeypatch):
+    import tools.common_func as common_func
+
+    file_path = tmp_path / "locked.xlsx"
+    workbook = Workbook()
+    monkeypatch.setattr(
+        common_func.os, "replace",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("access denied")),
+    )
+    monkeypatch.setattr(common_func.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(PermissionError, match="Close the Excel file"):
+        save_workbook_safely(workbook, file_path)
+
+    assert not file_path.exists()
+    assert not list(tmp_path.glob(".reimbursement_*.xlsx"))
+    workbook.close()

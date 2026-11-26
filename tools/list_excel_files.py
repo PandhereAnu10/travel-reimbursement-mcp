@@ -14,6 +14,9 @@ def list_excel_files() -> dict:
 
     try:
         # A missing directory is treated as an empty directory.
+        if OUTPUT_DIR.is_symlink():
+            raise OSError("The generated workbook directory cannot be a symbolic link.")
+
         if not OUTPUT_DIR.exists():
             return {
                 "status": "success",
@@ -33,6 +36,7 @@ def list_excel_files() -> dict:
             # Ignore directories, temporary files and non-xlsx files.
             if (
                 not file_path.is_file()
+                or file_path.is_symlink()
                 or file_path.name.startswith("~$")
                 or file_path.suffix.lower() != ".xlsx"
             ):

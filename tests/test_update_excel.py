@@ -314,3 +314,59 @@ def test_reject_invalid_filename(tmp_path, monkeypatch):
     )
 
     assert result["status"] == "error"
+
+
+def test_reject_expense_update_outside_travel_period(reimbursement_file_with_expense):
+    from openpyxl import load_workbook
+    from datetime import date
+    from templates.reimbursement import EMPLOYEE_FIELDS
+
+    workbook = load_workbook(reimbursement_file_with_expense)
+    employee = workbook[EMPLOYEE_SHEET]
+    employee[EMPLOYEE_FIELDS["travel_start_date"]["cell"]] = date(2026, 11, 20)
+    employee[EMPLOYEE_FIELDS["travel_end_date"]["cell"]] = date(2026, 11, 22)
+    workbook.save(reimbursement_file_with_expense)
+    workbook.close()
+
+    result = update_module.update_excel(
+        filename="test.xlsx", expense_id="EXP001", updates={"date": "2026-11-25"}
+    )
+    assert result["status"] == "error"
+    assert "between the travel start date" in result["message"]
+
+
+def test_reject_travel_period_change_that_excludes_existing_expense(reimbursement_file_with_expense):
+    result = update_module.update_excel(
+        filename="test.xlsx",
+        employee_updates={
+            "travel_start_date": "2026-11-18",
+            "travel_end_date": "2026-11-19",
+        },
+    )
+    assert result["status"] == "error"
+    assert "outside the travel period" in result["message"]
+
+
+def test_reject_expense_date_update_when_travel_period_is_missing(reimbursement_file_with_expense):
+    from openpyxl import load_workbook
+    from templates.reimbursement import EMPLOYEE_FIELDS, EMPLOYEE_SHEET
+
+    workbook = load_workbook(reimbursement_file_with_expense)
+    employee = workbook[EMPLOYEE_SHEET]
+    employee[EMPLOYEE_FIELDS["travel_start_date"]["cell"]] = None
+    employee[EMPLOYEE_FIELDS["travel_end_date"]["cell"]] = None
+    workbook.save(reimbursement_file_with_expense)
+    workbook.close()
+
+    result = update_module.update_excel(
+        filename="test.xlsx", expense_id="EXP001", updates={"date": "2026-11-21"}
+    )
+    assert result["status"] == "error"
+    assert "Travel start and end dates must be recorded" in result["message"]
+
+    workbook = load_workbook(reimbursement_file_with_expense)
+    original_date = workbook[EXPENSE_SHEET].cell(
+        EXPENSE_FIRST_ROW, EXPENSE_COLUMNS["date"]
+    ).value
+    assert original_date.date() == date(2026, 11, 20)
+    workbook.close()

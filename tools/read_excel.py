@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from tools.create_excel import OUTPUT_DIR, validate_filename
+from tools.create_excel import OUTPUT_DIR, validate_filename, resolve_workbook_path
 
 
 def make_json_compatible(value):
@@ -23,7 +23,7 @@ def read_excel(filename: str, sheet_name: str = None, include_formulas: bool = F
     filename = validate_filename(filename)
 
     # Step 2: Check whether the workbook exists.
-    file_path = OUTPUT_DIR / filename
+    file_path = resolve_workbook_path(filename, OUTPUT_DIR)
 
     if not file_path.exists():
         raise FileNotFoundError(

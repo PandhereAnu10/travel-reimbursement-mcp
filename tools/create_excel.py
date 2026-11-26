@@ -12,6 +12,8 @@ from templates.reimbursement import (
     EXPENSE_TITLE_CELL,
     CALCULATOR_TITLE_CELL,
     SUMMARY_TITLE_CELL,
+    SUBMISSION_STATUS_CELL,
+    DEFAULT_STATUS,
 )
 
 from templates.formatting import format_workbook
@@ -26,10 +28,14 @@ OUTPUT_DIR = Path(__file__).resolve().parents[1] / "data" / "generated"
 
 def validate_filename(filename: str) -> str:
 
-    if not filename or not filename.strip():
+    if not isinstance(filename, str) or not filename.strip():
         raise ValueError("Filename cannot be empty.")
 
     filename = filename.strip()
+    if "\x00" in filename or any(ord(char) < 32 for char in filename):
+        raise ValueError("Filename contains an invalid control character.")
+    if any(char in filename for char in '<>:"|?*') or filename.endswith((".", " ")):
+        raise ValueError("Filename contains characters that are not supported on Windows.")
 
     # Prevent directory traversal and paths outside OUTPUT_DIR.
     if "/" in filename or "\\" in filename:
@@ -48,6 +54,22 @@ def validate_filename(filename: str) -> str:
     return filename
 
 
+def resolve_workbook_path(filename: str, output_dir: Path = None) -> Path:
+    safe_name = validate_filename(filename)
+    output_dir = Path(output_dir) if output_dir is not None else OUTPUT_DIR
+    if output_dir.is_symlink():
+        raise ValueError("The generated workbook directory cannot be a symbolic link.")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    resolved_output_dir = output_dir.resolve()
+    candidate = output_dir / safe_name
+    if candidate.is_symlink():
+        raise ValueError("Symbolic-link workbook paths are not allowed.")
+    resolved = candidate.resolve()
+    if resolved.parent != resolved_output_dir:
+        raise ValueError("Access outside the generated workbook directory is not allowed.")
+    return candidate
+
+
 def create_excel(filename: str) -> dict:
     # Step 1: Validate the filename.
     filename = validate_filename(filename)
@@ -56,7 +78,7 @@ def create_excel(filename: str) -> dict:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Step 3: Build the complete output path.
-    file_path = OUTPUT_DIR / filename
+    file_path = resolve_workbook_path(filename)
 
     # Step 4: Prevent accidental overwriting.
     if file_path.exists():
@@ -83,6 +105,7 @@ def create_excel(filename: str) -> dict:
         expense_ws[EXPENSE_TITLE_CELL] = EXPENSE_SHEET
         calculator_ws[CALCULATOR_TITLE_CELL] = CALCULATOR_SHEET
         summary_ws[SUMMARY_TITLE_CELL] = SUMMARY_SHEET
+        summary_ws[SUBMISSION_STATUS_CELL] = DEFAULT_STATUS
 
         # Step 8: Apply worksheet formatting.
         format_workbook(workbook)

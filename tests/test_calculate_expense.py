@@ -248,3 +248,20 @@ def test_reject_fractional_per_diem_days(reimbursement_file):
 
     assert result["status"] == "error"
     assert "positive whole number" in result["message"]
+
+
+def test_non_string_calculation_type_returns_error(reimbursement_file):
+    result = calculate_module.calculate_expense(
+        filename="test.xlsx", calculation_type=None
+    )
+    assert result["status"] == "error"
+    assert "must be text" in result["message"]
+
+
+def test_currency_code_must_be_three_letters(reimbursement_file):
+    result = calculate_module.calculate_expense(
+        filename="test.xlsx", calculation_type="currency_conversion",
+        foreign_amount=100, exchange_rate=80, currency_code="US dollars",
+    )
+    assert result["status"] == "error"
+    assert "three-letter" in result["message"]

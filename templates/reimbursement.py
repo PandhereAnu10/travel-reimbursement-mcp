@@ -169,7 +169,6 @@ DECLARATION_OPTIONS = [
 
 SUBMISSION_STATUS_OPTIONS = [
     "Draft",
-    "Submitted to HR"
 ]
 
 

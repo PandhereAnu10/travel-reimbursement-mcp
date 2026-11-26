@@ -1,11 +1,14 @@
 
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 import json
 import os
 import re
+import sys
 import math
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from templates.reimbursement import REQUIRED_EMPLOYEE_FIELDS
 
@@ -23,6 +26,50 @@ LLM_MODEL = os.getenv("LLM_MODEL")
 
 # MCP Streamable HTTP server endpoint. Start server.py in a separate terminal.
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/mcp")
+MCP_AUTH_TOKEN = os.getenv("MCP_AUTH_TOKEN")
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "streamable-http").strip().lower()
+
+
+@asynccontextmanager
+async def authenticated_mcp_client():
+    if MCP_TRANSPORT == "stdio":
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+
+        server_parameters = StdioServerParameters(
+            command=sys.executable,
+            args=[str(PROJECT_DIR / "server.py"), "--transport", "stdio"],
+            env=os.environ.copy(),
+        )
+        async with stdio_client(server_parameters) as transport:
+            async with Client(transport) as mcp_client:
+                yield mcp_client
+        return
+
+    if MCP_TRANSPORT != "streamable-http":
+        raise ValueError("MCP_TRANSPORT must be 'stdio' or 'streamable-http'.")
+
+    import httpx
+    from mcp.client.streamable_http import streamable_http_client
+
+    if not MCP_AUTH_TOKEN or len(MCP_AUTH_TOKEN) < 32:
+        raise ValueError(
+            "MCP_AUTH_TOKEN is missing or too short. Add the same generated token "
+            "(at least 32 characters) to the server and client .env configuration."
+        )
+
+    async with httpx.AsyncClient(
+        headers={
+            "Authorization": f"Bearer {MCP_AUTH_TOKEN}",
+            "ngrok-skip-browser-warning": "true",
+        },
+        timeout=httpx.Timeout(30.0, read=300.0),
+    ) as http_client:
+        transport = streamable_http_client(
+            MCP_SERVER_URL,
+            http_client=http_client,
+        )
+        async with Client(transport) as mcp_client:
+            yield mcp_client
 
 
 def convert_mcp_tools_to_llm_tools(mcp_tools):
@@ -117,6 +164,11 @@ def is_clarification_request(content):
         "missing field",
         "need the",
         "provide the",
+        "would you like me to",
+        "do you want me to",
+        "would you prefer me to",
+        "should i",
+        "shall i",
     )
     return "?" in text and any(phrase in text for phrase in clarification_phrases)
 
@@ -204,11 +256,39 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
     def value_was_supplied(value):
         if not isinstance(value, (str, int, float)) or isinstance(value, bool):
             return False
-        normalized_value = re.sub(r"[^a-z0-9]", "", str(value).casefold())
+        if isinstance(value, (int, float)):
+            try:
+                expected_number = Decimal(str(value))
+            except (InvalidOperation, ValueError):
+                return False
+            if not expected_number.is_finite():
+                return False
+
+            # Treat numerically equivalent forms (83.5 and 83.50) as the
+            # same user-supplied value, without allowing 83.5 to match 835.
+            number_tokens = re.findall(
+                r"(?<![a-z0-9])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![a-z0-9])",
+                conversation_evidence.casefold(),
+            )
+            for token in number_tokens:
+                try:
+                    if Decimal(token.replace(",", "")) == expected_number:
+                        return True
+                except InvalidOperation:
+                    continue
+            return False
+
+        normalized_value = re.sub(r"[^a-z0-9]+", " ", str(value).casefold()).strip()
         normalized_evidence = re.sub(
-            r"[^a-z0-9]", "", conversation_evidence.casefold()
+            r"[^a-z0-9]+", " ", conversation_evidence.casefold()
         )
-        return bool(normalized_value) and normalized_value in normalized_evidence
+        if not normalized_value:
+            return False
+        # Require token boundaries so IDs and words are not partial matches.
+        return re.search(
+            rf"(?<![a-z0-9]){re.escape(normalized_value)}(?![a-z0-9])",
+            normalized_evidence,
+        ) is not None
 
     def validate_employee_values(employee_data):
         if "travel_days" in employee_data:
@@ -227,9 +307,13 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
                 )
             if field in {"travel_start_date", "travel_end_date"}:
                 try:
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+                        raise ValueError
                     date.fromisoformat(value.strip())
                 except ValueError:
                     return False, f"{field} must use YYYY-MM-DD format."
+            if field == "email" and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value.strip()):
+                return False, "email must be a valid email address."
         return True, "Employee values are grounded in the conversation."
 
     employee_fields = {
@@ -363,6 +447,9 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
                 "The Expense ID was not provided by the user or returned by a "
                 "verified tool. Ask the user for the exact Expense ID; never invent one."
             )
+        for field in ("filename", "expense_date", "description"):
+            if not value_was_supplied(arguments[field]):
+                return False, f"The value for '{field}' is not present in the user's messages or verified tool results. Ask the user to confirm it instead of guessing."
 
     # UPDATE EXCEL
     elif tool.name == "update_excel":
@@ -407,8 +494,11 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
 
             if "amount" in updates and not is_number(updates["amount"]):
                 return False, "Updated amount must be a finite, non-negative number."
-            if "amount" in updates and not value_was_supplied(updates["amount"]):
-                return False, "The updated amount is not present in the user's messages. Ask the user to confirm it."
+            for field, value in updates.items():
+                if field == "receipt_reference" and value in (None, ""):
+                    continue
+                if not value_was_supplied(value):
+                    return False, f"The updated value for '{field}' is not present in the user's messages or verified tool results. Ask the user to confirm it."
 
             if (
                 "category" in updates
@@ -524,7 +614,7 @@ async def main():
 
     print("Connecting to MCP server...")
 
-    async with Client(MCP_SERVER_URL) as mcp_client:
+    async with authenticated_mcp_client() as mcp_client:
 
         print("Connected successfully!")
 
@@ -601,10 +691,12 @@ async def main():
                     "8. If a required value is missing, ask the user for it. Do not call write_excel until "
                     "all required values are available.\n"
                     "9. Do not assume the current date is the expense date.\n"
-                    "10. Do not use generic descriptions such as 'Travel expense' unless the user explicitly "
+                    "10. A complete travel start date and end date must already be recorded before adding an expense. "
+                    "If either date is missing, ask the user for the travel dates and record them before creating the expense.\n"
+                    "11. Do not use generic descriptions such as 'Travel expense' unless the user explicitly "
                     "provides or confirms that description.\n"
-                    "11. If multiple expenses are requested, make one separate write_excel call per expense.\n"
-                    "12. Wait for each tool result before reporting success.\n\n"
+                    "12. If multiple expenses are requested, make one separate write_excel call per expense.\n"
+                    "13. Wait for each tool result before reporting success.\n\n"
 
                     "EMPLOYEE AND TRAVEL INFORMATION RULES:\n"
                     "1. Use write_excel with employee_info to add employee or travel information.\n"
@@ -693,6 +785,7 @@ async def main():
                     "18. When validation or execution identifies missing/invalid information, ask the user for that specific information and wait for the reply before retrying.\n"
                     "19. For employee writes, report only fields listed in updated_fields and report record_status/missing_fields accurately.\n"
                     "20. When a tool succeeds, provide the confirmed result and finish the task; do not ask unnecessary follow-up questions.\n"
+                    "21. If the user declines, says no, stop, or cancels a proposed action, do not call a tool for that action; acknowledge the cancellation.\n"
                 ),
             },
             {
@@ -724,8 +817,13 @@ async def main():
                 print(f"\nLLM request failed: {error}")
                 print("No further action was taken. Check the model endpoint/key and retry.")
                 break
-
-            assistant_message = response.choices[0].message
+            
+            
+            choices = getattr(response, "choices", None) or []
+            if not choices:
+                print("\nThe model returned no response choices. No MCP tool was called.")
+                break
+            assistant_message = choices[0].message
 
             if not assistant_message.tool_calls:
                 final_response = clean_assistant_response(
@@ -784,6 +882,12 @@ async def main():
 
                 print(f"\nLLM selected tool: {tool_name}")
                 print("Arguments:", tool_arguments)
+                if not (
+                    tool_name == "write_excel"
+                    and isinstance(tool_arguments, dict)
+                    and tool_arguments.get("employee_info") is not None
+                ):
+                    verified_employee_write = None
 
                 if awaiting_user_reply:
                     tool_output = {
@@ -840,6 +944,7 @@ async def main():
 
                 if tool_failed:
                     awaiting_user_reply = True
+                    verified_employee_write = None
 
                 print("Tool result:", json.dumps(tool_output, ensure_ascii=False, default=str))
                 messages.append({

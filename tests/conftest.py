@@ -70,6 +70,8 @@ def valid_claim(output_dir):
             employee_sheet[cell] = date(2026, 11, 20)
         elif field == "travel_end_date":
             employee_sheet[cell] = date(2026, 11, 22)
+        elif field == "email":
+            employee_sheet[cell] = "test@example.com"
         else:
             employee_sheet[cell] = f"Test {field}"
 
@@ -101,6 +103,10 @@ def reimbursement_file_with_expense(reimbursement_file):
     file_path = reimbursement_file
 
     workbook = load_workbook(file_path)
+    employee_sheet = workbook[EMPLOYEE_SHEET]
+    employee_sheet[EMPLOYEE_FIELDS["travel_start_date"]["cell"]] = date(2026, 11, 20)
+    employee_sheet[EMPLOYEE_FIELDS["travel_end_date"]["cell"]] = date(2026, 11, 22)
+
     expense_sheet = workbook[EXPENSE_SHEET]
 
     expense_values = {
