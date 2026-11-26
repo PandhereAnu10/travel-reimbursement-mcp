@@ -71,3 +71,23 @@ def test_resolve_workbook_path_rejects_symlink(tmp_path):
         pytest.skip("Symlink creation is not available on this platform")
     with pytest.raises(ValueError, match="Symbolic-link"):
         create_excel_module.resolve_workbook_path("linked.xlsx", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "CON.xlsx",
+        "con.xlsx",
+        "PRN.xlsx",
+        "AUX.xlsx",
+        "NUL.xlsx",
+        "COM1.xlsx",
+        "COM9.xlsx",
+        "LPT1.xlsx",
+        "LPT9.xlsx",
+        "CON.backup.xlsx",
+    ],
+)
+def test_reject_reserved_windows_device_names(filename):
+    with pytest.raises(ValueError, match="reserved Windows device name"):
+        create_excel_module.validate_filename(filename)

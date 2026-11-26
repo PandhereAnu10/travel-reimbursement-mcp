@@ -20,6 +20,7 @@ from templates.reimbursement import (
     DATE_FORMAT,
     CURRENCY_FORMAT,
     SUMMARY_SHEET,
+    ADVANCE_RECEIVED_CELL,
 )
 
 from tools.common_func import (
@@ -48,6 +49,7 @@ def update_excel(
     updates: dict = None,
     employee_updates: dict = None,
     declaration: str = None,
+    advance_received: float = None,
 ) -> dict:
     # Update selected fields of an existing expense record
 
@@ -185,10 +187,15 @@ def update_excel(
                     f"Declaration must be one of {DECLARATION_OPTIONS}."
                 )
 
+        validated_advance = None
+        if advance_received is not None:
+            validated_advance = validate_expense_amount(advance_received)
+
         if (
             updates is None
             and employee_updates is None
             and declaration is None
+            and advance_received is None
         ):
             raise ValueError(
                 "Provide expense updates, employee updates, or a declaration."
@@ -247,13 +254,18 @@ def update_excel(
                 if field in ("travel_start_date", "travel_end_date"):
                     employee_sheet[cell].number_format = DATE_FORMAT
 
-        if declaration is not None:
+        if declaration is not None or advance_received is not None:
             if SUMMARY_SHEET not in workbook.sheetnames:
                 raise ValueError(
                     f"Worksheet '{SUMMARY_SHEET}' does not exist."
                 )
 
-            workbook[SUMMARY_SHEET][DECLARATION_CELL] = declaration
+            summary_sheet = workbook[SUMMARY_SHEET]
+            if declaration is not None:
+                summary_sheet[DECLARATION_CELL] = declaration
+            if validated_advance is not None:
+                summary_sheet[ADVANCE_RECEIVED_CELL] = validated_advance
+                summary_sheet[ADVANCE_RECEIVED_CELL].number_format = CURRENCY_FORMAT
 
         # Handle expense record updates.
         target_row = None
@@ -362,7 +374,12 @@ def update_excel(
         # 9. Save safely.
         save_workbook_safely(workbook, file_path)
 
-        if updates is not None and employee_updates is None and declaration is None:
+        if (
+            updates is not None
+            and employee_updates is None
+            and declaration is None
+            and advance_received is None
+        ):
             return {
                 "status": "success",
                 "filename": filename,
@@ -376,10 +393,13 @@ def update_excel(
         return {
             "status": "success",
             "filename": filename,
-            "message": "Employee and travel information updated successfully.",
-            "updated_fields": list(validated_employee_updates.keys())
-                if employee_updates is not None else [],
+            "message": "Workbook information updated successfully.",
+            "updated_fields": (
+                list(validated_employee_updates.keys())
+                if employee_updates is not None else []
+            ) + (["advance_received"] if validated_advance is not None else []),
             "declaration": declaration,
+            "advance_received": validated_advance,
             "expense_id": expense_id if updates is not None else None,
             "expense_updated_fields": list(validated_updates.keys())
                 if updates is not None else [],

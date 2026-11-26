@@ -73,3 +73,11 @@ def test_server_supports_stdio_and_http_transports():
     assert 'choices=("stdio", "streamable-http")' in source
     assert 'mcp.run(transport="stdio")' in source
     assert 'mcp.streamable_http_app(streamable_http_path="/mcp")' in source
+
+
+def test_update_tool_exposes_advance_received_argument(monkeypatch):
+    import inspect
+    _, registered = load_server_with_mcp_stub(monkeypatch)
+    parameters = inspect.signature(registered["update_excel"]["function"]).parameters
+    assert "advance_received" in parameters
+    assert "advance_received" in registered["update_excel"]["description"]

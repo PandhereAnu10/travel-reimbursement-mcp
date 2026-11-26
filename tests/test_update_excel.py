@@ -14,6 +14,7 @@ from templates.reimbursement import (
     EXPENSE_FIRST_ROW,
     EXPENSE_COLUMNS,
     SUMMARY_SHEET,
+    ADVANCE_RECEIVED_CELL,
 )
 
 def test_update_expense_record(reimbursement_file_with_expense):
@@ -370,3 +371,29 @@ def test_reject_expense_date_update_when_travel_period_is_missing(reimbursement_
     ).value
     assert original_date.date() == date(2026, 11, 20)
     workbook.close()
+
+
+def test_update_advance_received_amount(reimbursement_file_with_expense):
+    result = update_module.update_excel(
+        filename="test.xlsx",
+        advance_received=1000,
+    )
+
+    assert result["status"] == "success"
+    assert "advance_received" in result["updated_fields"]
+    assert result["advance_received"] == 1000
+
+    workbook = load_workbook(reimbursement_file_with_expense)
+    summary = workbook[SUMMARY_SHEET]
+    assert summary[ADVANCE_RECEIVED_CELL].value == 1000
+    workbook.close()
+
+
+def test_reject_negative_advance_received_amount(reimbursement_file_with_expense):
+    result = update_module.update_excel(
+        filename="test.xlsx",
+        advance_received=-100,
+    )
+
+    assert result["status"] == "error"
+    assert "non-negative" in result["message"]

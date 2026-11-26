@@ -205,3 +205,24 @@ def test_clarification_detector_catches_yes_no_action_question(client_module):
     assert client_module.is_clarification_request(
         "Do you want me to replace the existing expense?"
     )
+
+
+def test_advance_amount_is_forwarded_only_when_user_provided(client_module):
+    tool = make_tool(
+        "update_excel",
+        {"filename", "expense_id", "updates", "employee_updates", "declaration", "advance_received"},
+    )
+    valid, message = client_module.validate_tool_arguments(
+        tool,
+        {"filename": "claim.xlsx", "advance_received": 1000},
+        "I received an advance of INR 1,000 for claim.xlsx.",
+    )
+    assert valid, message
+
+    valid, message = client_module.validate_tool_arguments(
+        tool,
+        {"filename": "claim.xlsx", "advance_received": 1000},
+        "Update the advance amount in claim.xlsx.",
+    )
+    assert not valid
+    assert "not present in the user's messages" in message

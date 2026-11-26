@@ -51,6 +51,22 @@ def validate_filename(filename: str) -> str:
     if Path(filename).suffix.lower() != ".xlsx":
         raise ValueError("Only .xlsx files are supported.")
 
+    # Windows reserves these device names even when an extension is present.
+    # Reject them on every platform so workbook names remain portable.
+    reserved_stem = filename.split(".", 1)[0].rstrip(" .").casefold()
+    reserved_names = {"con", "prn", "aux", "nul"}
+    reserved_names.update(f"com{number}" for number in range(1, 10))
+    reserved_names.update(f"lpt{number}" for number in range(1, 10))
+    reserved_names.update(
+        f"{prefix}{digit}"
+        for prefix in ("com", "lpt")
+        for digit in ("¹", "²", "³")
+    )
+    if reserved_stem in reserved_names:
+        raise ValueError(
+            f"'{filename}' is a reserved Windows device name. Choose another filename."
+        )
+
     return filename
 
 

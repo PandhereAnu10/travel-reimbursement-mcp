@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import math
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from templates.reimbursement import REQUIRED_EMPLOYEE_FIELDS
@@ -138,7 +138,6 @@ def clean_assistant_response(content):
 
 
 def is_clarification_request(content):
-
     if not content:
         return False
 
@@ -215,6 +214,7 @@ def format_verified_employee_write(result):
     return "\n".join(lines)
 
 def validate_tool_arguments(tool, arguments, conversation_evidence=""):
+
 
     if not isinstance(arguments, dict):
         return False, "Tool arguments must be a JSON object."
@@ -430,6 +430,32 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
             return False, (
                 f"Expense creation requires: {', '.join(missing)}"
             )
+            
+         # Normalize expense dates before provenance validation.
+        # The LLM may convert YYYY-MM-DD into an ISO datetime.
+        expense_date = arguments.get("expense_date")
+
+        if not isinstance(expense_date, str):
+            return False, "expense_date must be a valid date in YYYY-MM-DD format."
+
+        expense_date = expense_date.strip()
+
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", expense_date):
+                expense_date = date.fromisoformat(expense_date).isoformat()
+            else:
+                expense_date = datetime.fromisoformat(
+                    expense_date.replace("Z", "+00:00")
+                ).date().isoformat()
+
+        except ValueError:
+            return False, (
+                "Invalid expense date. Use a valid date in YYYY-MM-DD format."
+            )
+
+        # Pass the normalized date to the MCP tool.
+        arguments["expense_date"] = expense_date
+
 
         if arguments["category"] not in expense_categories:
             return False, (
@@ -456,8 +482,10 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
         updates = arguments.get("updates")
         employee_updates = arguments.get("employee_updates")
         declaration = arguments.get("declaration")
+        advance_received = arguments.get("advance_received")
 
-        if updates is None and employee_updates is None and declaration is None:
+        if (updates is None and employee_updates is None and declaration is None
+                and advance_received is None):
             return False, (
                 "Provide at least one of updates, employee_updates, "
                 "or declaration."
@@ -524,6 +552,12 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
 
         if declaration is not None and declaration not in declaration_options:
             return False, "declaration must be either 'Yes' or 'No'."
+
+        if advance_received is not None:
+            if not is_number(advance_received):
+                return False, "advance_received must be a finite, non-negative number."
+            if not value_was_supplied(advance_received):
+                return False, "The advance amount is not present in the user's messages. Ask the user to confirm it."
 
     # CALCULATE EXPENSE
     elif tool.name == "calculate_expense":
@@ -657,7 +691,8 @@ async def main():
                     "6. Add employee or travel information -> write_excel with employee_info.\n"
                     "7. Modify employee or travel information -> update_excel with employee_updates.\n"
                     "8. Record or change a declaration -> write_excel or update_excel, respectively.\n"
-                    "9. Calculate mileage, per diem, currency conversion, or arithmetic -> calculate_expense.\n"
+                    "9. Update an advance received amount -> update_excel with advance_received.\n"
+                    "10. Calculate mileage, per diem, currency conversion, or arithmetic -> calculate_expense.\n"
                     "10. Submit a claim to HR -> submit_to_hr.\n"
                     "11. Never use write_excel to modify an existing expense.\n"
                     "12. Never use update_excel to create a new expense.\n"
@@ -713,6 +748,7 @@ async def main():
                     "10. Use only supported employee field names in employee_updates.\n"
                     "11. The declaration argument accepts only 'Yes' or 'No'. Never assume the user's declaration.\n"
                     "12. Employee information and declaration may be recorded together when requested.\n"
+                    "13. If the user provides an advance received amount, pass it as advance_received in update_excel; never omit it.\n"
                     "13. A normal employee/travel record must include every required field: employee_name, employee_id, department, designation, email, travel_purpose, source_location, destination_location, travel_start_date, and travel_end_date.\n"
                     "14. If any required field is missing, ask for it and do not save a partial record.\n"
                     "15. Partial saving is allowed only when the user explicitly asks to save a draft; then pass save_as_draft=true.\n"

@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from mcp.server import MCPServer
 
 from security import BearerTokenMiddleware
+from mcp.server.transport_security import TransportSecuritySettings
 
 from tools.create_excel import create_excel as create_excel_workbook
 from tools.read_excel import read_excel as read_excel_workbook
@@ -131,7 +132,8 @@ def write_excel_tool(
         "amount, and/or receipt_reference. An explicit expense-date change requires "
         "a complete travel start/end period in the workbook. For employee/travel information, use "
         "employee_updates; declaration can be updated separately or alongside "
-        "those fields. Never pass travel_days: it is calculated from travel dates. "
+        "those fields. Use advance_received to set the advance amount on the Claim Summary & HR sheet. "
+        "Never pass travel_days: it is calculated from travel dates. "
         "Only explicitly supplied fields are changed."
     ),
 )
@@ -141,6 +143,7 @@ def update_excel_tool(
     updates: dict = None,
     employee_updates: dict = None,
     declaration: str = None,
+    advance_received: float = None,
 ) -> dict:
     return update_excel(
         filename=filename,
@@ -148,6 +151,7 @@ def update_excel_tool(
         updates=updates,
         employee_updates=employee_updates,
         declaration=declaration,
+        advance_received=advance_received,
     )
 
 
@@ -228,7 +232,20 @@ if __name__ == "__main__":
                 "python -c \"import secrets; print(secrets.token_urlsafe(32))\" and add it to .env."
             )
 
-        app = mcp.streamable_http_app(streamable_http_path="/mcp")
+        app = mcp.streamable_http_app(
+            streamable_http_path="/mcp",
+            transport_security=TransportSecuritySettings(
+                allowed_hosts=[
+                    "127.0.0.1:*",
+                    "localhost:*",
+                    "ghostlier-adrianna-unsuccinctly.ngrok-free.dev",
+                    "ghostlier-adrianna-unsuccinctly.ngrok-free.dev:*",
+                ],
+                allowed_origins=[
+                    "https://ghostlier-adrianna-unsuccinctly.ngrok-free.dev",
+                ],
+            ),
+        )
         app = BearerTokenMiddleware(app, auth_token, protected_path="/mcp")
 
         host = os.getenv("MCP_HOST", "127.0.0.1")
