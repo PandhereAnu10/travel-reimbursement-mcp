@@ -4,6 +4,7 @@ venv/
 .pytest_cache/
 data/generated/*
 !data/generated/.gitkeep
+!data/generated/Demo_Travel_Reimbursement.xlsx
 
 # Python cache
 __pycache__/
