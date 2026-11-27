@@ -5,6 +5,9 @@ venv/
 data/generated/*
 !data/generated/.gitkeep
 !data/generated/Demo_Travel_Reimbursement.xlsx
+!data/generated/LLM_test_Claim.xlsx
+!data/generated/Client_Regression_Test.xlsx
+!data/generated/Anushka_Travel_Claim.xlsx
 
 # Python cache
 __pycache__/
