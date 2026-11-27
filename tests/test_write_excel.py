@@ -373,3 +373,52 @@ def test_new_expense_is_rejected_when_travel_period_is_missing(reimbursement_fil
         EXPENSE_FIRST_ROW, EXPENSE_COLUMNS["expense_id"]
     ).value is None
     workbook.close()
+
+@pytest.mark.parametrize("expense_date", ["2026-11-19", "2026-12-01"])
+def test_reject_expense_date_outside_travel_period(reimbursement_file, expense_date):
+    set_test_travel_period(reimbursement_file)
+
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        expense_id="EXP_OUTSIDE",
+        expense_date=expense_date,
+        category="Transport",
+        description="Out-of-period expense",
+        amount=500,
+        receipt_reference="REC_OUTSIDE",
+    )
+
+    assert result["status"] == "error"
+    assert "between the travel start date and travel end date" in result["message"]
+
+
+@pytest.mark.parametrize("expense_date", ["2026-11-20", "2026-11-30"])
+def test_accept_expense_date_on_travel_period_boundaries(reimbursement_file, expense_date):
+    set_test_travel_period(reimbursement_file)
+
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        expense_id="EXP_BOUNDARY",
+        expense_date=expense_date,
+        category="Transport",
+        description="Boundary-date expense",
+        amount=500,
+        receipt_reference="REC_BOUNDARY",
+    )
+
+    assert result["status"] == "success"
+
+
+def test_reject_new_expense_when_travel_period_is_missing(reimbursement_file):
+    result = write_excel_module.write_excel(
+        filename="test.xlsx",
+        expense_id="EXP_NO_PERIOD",
+        expense_date="2026-11-25",
+        category="Transport",
+        description="Expense without travel period",
+        amount=500,
+        receipt_reference="REC_NO_PERIOD",
+    )
+
+    assert result["status"] == "error"
+    assert "Travel start and end dates must be recorded" in result["message"]

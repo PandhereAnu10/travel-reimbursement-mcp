@@ -178,19 +178,20 @@ def write_excel(
 
             save_workbook_safely(workbook, file_path)
 
-            return {
-                "status": "success",
-                "filename": filename,
-                "message": "Employee and travel information saved successfully.",
-                "updated_fields": list(validated_info.keys())
-                    if employee_info else [],
-                "record_status": (
-                    "Not applicable" if employee_info is None else
-                    "Draft - incomplete" if missing_fields else "Complete"
-                ),
-                "missing_fields": missing_fields if employee_info is not None else [],
-                "declaration": declaration,
-            }
+            if not expense_id:
+                return {
+                    "status": "success",
+                    "filename": filename,
+                    "message": "Employee and travel information saved successfully.",
+                    "updated_fields": list(validated_info.keys())
+                        if employee_info else [],
+                    "record_status": (
+                        "Not applicable" if employee_info is None else
+                        "Draft - incomplete" if missing_fields else "Complete"
+                    ),
+                    "missing_fields": missing_fields if employee_info is not None else [],
+                    "declaration": declaration,
+                }
 
         
         # 4. Validate input fields.

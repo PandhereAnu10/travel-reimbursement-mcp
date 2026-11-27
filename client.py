@@ -289,6 +289,56 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
             rf"(?<![a-z0-9]){re.escape(normalized_value)}(?![a-z0-9])",
             normalized_evidence,
         ) is not None
+        
+    
+    def date_was_supplied(value):
+        try:
+            expected = date.fromisoformat(value)
+        except (TypeError, ValueError):
+            return False
+
+        evidence = conversation_evidence
+
+        # ISO dates, including dates written with single-digit months/days.
+        for match in re.finditer(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", evidence):
+            try:
+                if date(int(match.group(1)), int(match.group(2)), int(match.group(3))) == expected:
+                    return True
+            except ValueError:
+                continue
+
+        # Dates such as "22nd Nov 2026" or "22 November 2026".
+        month_pattern = (
+            r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+            r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|"
+            r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?"
+        )
+
+        patterns = [
+            rf"\b(\d{{1,2}})(?:st|nd|rd|th)?[\s,/-]+({month_pattern})[\s,/-]+(\d{{4}})\b",
+            rf"\b({month_pattern})[\s,/-]+(\d{{1,2}})(?:st|nd|rd|th)?[,]?[\s,/-]+(\d{{4}})\b",
+        ]
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, evidence, re.IGNORECASE):
+                try:
+                    if pattern == patterns[0]:
+                        parsed = datetime.strptime(
+                            f"{match.group(1)} {match.group(2)} {match.group(3)}",
+                            "%d %b %Y" if len(match.group(2)) == 3 else "%d %B %Y",
+                        ).date()
+                    else:
+                        parsed = datetime.strptime(
+                            f"{match.group(2)} {match.group(1)} {match.group(3)}",
+                            "%d %b %Y" if len(match.group(1)) == 3 else "%d %B %Y",
+                        ).date()
+
+                    if parsed == expected:
+                        return True
+                except ValueError:
+                    continue
+
+        return False
 
     def validate_employee_values(employee_data):
         if "travel_days" in employee_data:
@@ -474,8 +524,16 @@ def validate_tool_arguments(tool, arguments, conversation_evidence=""):
                 "verified tool. Ask the user for the exact Expense ID; never invent one."
             )
         for field in ("filename", "expense_date", "description"):
-            if not value_was_supplied(arguments[field]):
-                return False, f"The value for '{field}' is not present in the user's messages or verified tool results. Ask the user to confirm it instead of guessing."
+            supplied = (
+                date_was_supplied(arguments[field])
+                if field == "expense_date"
+                else value_was_supplied(arguments[field])
+            )
+            if not supplied:
+                return False, (
+                    f"The value for '{field}' is not present in the user's messages "
+                    "or verified tool results. Ask the user to confirm it instead of guessing."
+                )
 
     # UPDATE EXCEL
     elif tool.name == "update_excel":

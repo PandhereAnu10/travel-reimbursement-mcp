@@ -28,8 +28,24 @@ def load_server_with_mcp_stub(monkeypatch):
     mcp_package.__path__ = []
     mcp_server_module = types.ModuleType("mcp.server")
     mcp_server_module.MCPServer = FakeMCPServer
+    transport_security_module = types.ModuleType(
+    "mcp.server.transport_security"
+    )
+
+    class FakeTransportSecuritySettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    transport_security_module.TransportSecuritySettings = (
+        FakeTransportSecuritySettings
+    )
     monkeypatch.setitem(sys.modules, "mcp", mcp_package)
     monkeypatch.setitem(sys.modules, "mcp.server", mcp_server_module)
+    monkeypatch.setitem(
+    sys.modules,
+    "mcp.server.transport_security",
+    transport_security_module,
+    )
     sys.modules.pop("server", None)
     module = importlib.import_module("server")
     return module, registered
@@ -63,7 +79,8 @@ def test_server_uses_authenticated_streamable_http_transport():
     source = Path(__file__).resolve().parents[1].joinpath("server.py").read_text(encoding="utf-8")
 
     assert "MCP_AUTH_TOKEN" in source
-    assert 'mcp.streamable_http_app(streamable_http_path="/mcp")' in source
+    assert "mcp.streamable_http_app(" in source
+    assert 'streamable_http_path="/mcp"' in source
     assert "BearerTokenMiddleware" in source
     assert "uvicorn.run(app, host=host, port=port)" in source
 
@@ -72,7 +89,8 @@ def test_server_supports_stdio_and_http_transports():
     source = Path(__file__).resolve().parents[1].joinpath("server.py").read_text(encoding="utf-8")
     assert 'choices=("stdio", "streamable-http")' in source
     assert 'mcp.run(transport="stdio")' in source
-    assert 'mcp.streamable_http_app(streamable_http_path="/mcp")' in source
+    assert "mcp.streamable_http_app(" in source
+    assert 'streamable_http_path="/mcp"' in source
 
 
 def test_update_tool_exposes_advance_received_argument(monkeypatch):
